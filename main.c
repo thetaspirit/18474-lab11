@@ -75,11 +75,11 @@ void main(void) {
   //* Echo Input Setup
   //* Pin P1.3 receives pulses from the ultrasonic sensor and generates
   //* interrupts.
-  //* Timer A 1 measures the width of the echo pulse.
+  //* Timer A 2 measures the width of the echo pulse.
   //******************************************************************
-  TA1CTL = SMCLK | MC__CONTINOUS; // Set SMCLK, CONTINUOUS MODE
-  TA1CTL &= ~(TIMER_OFF);         // Timer starts as off
-  TA1CTL |= TIMER_CLEAR;          // Timer starts at 0
+  TA2CTL = SMCLK | MC__CONTINOUS; // Set SMCLK, CONTINUOUS MODE
+  TA2CTL &= ~(TIMER_OFF);         // Timer starts as off
+  TA2CTL |= TIMER_CLEAR;          // Timer starts at 0
 
   // GPIO Input
   P1IE = BIT3;      // Enable interrupt for P1.3
@@ -92,12 +92,12 @@ void main(void) {
   // ADC
   //* whenever this timer interrupt goes off.
   //**********************
-  unsigned int clock_scalar = 0b111; // eigth scalar
-  unsigned int clock_count = 4096;
-  TA2EX0 = clock_scalar; // Sets the clock scalar value for Timer_2
-  TA2CCR0 = clock_count; // Sets value of Timer_2
-  TA2CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_2
-  TA2CCTL0 = CCIE;       // Enable interrupt for Timer_2
+  // unsigned int clock_scalar = 0b111; // eigth scalar
+  // unsigned int clock_count = 4096;
+  // TA2EX0 = clock_scalar; // Sets the clock scalar value for Timer_2
+  // TA2CCR0 = clock_count; // Sets value of Timer_2
+  // TA2CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_2
+  // TA2CCTL0 = CCIE;       // Enable interrupt for Timer_2
 
   //**********************
   //* Left and Right Motor Driver Setup
@@ -151,18 +151,19 @@ void ADC_SETUP(void) {
 
 //***********************************************************************
 //* Port 1 Interrupt Service Routine
-//* (Ultrasonic Sensor Pulses)
+//* Measures pulse width from the ultrasonic sensor's echo pin
+//* Using Timer A 2
 //***********************************************************************
 #pragma vector = PORT1_VECTOR
 __interrupt void Port_1(void) {
   if (P1IV == 0x8) { // check that port P1.3 is the source of the interrupt
     if (!(P1IES & BIT3)) {     // Rising edge detected
-      TA1CTL |= MC__CONTINOUS; // start the timer
+      TA2CTL |= MC__CONTINOUS; // start the timer
       P1IES |= BIT3;           // searching for falling edge next
     } else {
-      TA1CTL &= ~(TIMER_OFF);     // Turn timer off
-      ultrasonic_pulse_us = TA1R; // Save reading
-      TA1CTL |= TIMER_CLEAR;      // clear timer
+      TA2CTL &= ~(TIMER_OFF);     // Turn timer off
+      ultrasonic_pulse_us = TA2R; // Save reading
+      TA2CTL |= TIMER_CLEAR;      // clear timer
       P1IES &= ~(BIT3);           // searching for rising edge next
     }
   }
