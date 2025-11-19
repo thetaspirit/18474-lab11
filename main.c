@@ -1,197 +1,222 @@
 #include <msp430.h>
 
+#include "myClocks.h"  // Required for the LCD
+#include "myGpio.h"    // Required for the LCD
+#include "myLcd.h"     // Required for the LCD
+#include <driverlib.h> // Required for the LCD
+
+#define RED_LED 0x0001       // P1.0 is the red LED
+#define GREEN_LED 0x0080     // P9.7 is the green LED
 #define STOP_WATCHDOG 0x5A80 // Stop the watchdog timer
+#define ACLK 0x0100          // Timer_A ACLK source
+#define UP 0x0010            // Timer_A Up mode
+#define SMCLK 0x0200         // Timer_A SMCLK source
+#define TIMER_OFF 0x30       // CLEAR these bits to stop Timer_A
+#define TIMER_CLEAR 0x4      // Set this bit to clear the count of Timer_A
 #define ENABLE_PINS 0xFFFE   // Required to use inputs and outputs
 
-#define GREEN_LED 0x0080 // P9.7 is the green LED
+#define IR_LED BIT7 // P9.7 will be output for IR LED (it's also the green LED)
 
-#define BUTTON1 0x02 // P1.1 is button one
-#define BUTTON2 0x04 // P1.2 is button two
-
-#define TIMER_OFF 0x30 // CLEAR these bits to stop Timer_A
-
-#define M1EN1 BIT7 // motor pin EN1 is connected to P1.7
-#define M1EN2 BIT5 // motor pin EN2 is connected to P2.5
-#define M1PWM BIT6 // motor pin PWM is connected to P1.6
-
-void SMCLK_SetTo1MHz(void); // Switches SMCLK to DCO at 1MHz
+void ADC_SETUP(void);       // Used to setup ADC12 peripheral
 void SwitchToLFXT(void);    // Switches ACLK to Low Frequency eXTernal crystal
                             // (LFXT) at 32.768kHz
+void SMCLK_SetTo1MHz(void); // Switches SMCLK to DCO at 1MHz
 
-volatile int dutycycle_direction = 1; // +1 for increasing, -1 for decreasing
-#define CLOCK_SCALAR 8
-#define RAMP_TIME 10
-// seconds
-#define RESOLUTION 50
-// the number of steps for the pwm duty cycle to go from 0% to 100%
-// over the course of 10 seconds
-// note that since the CCR0 controlling the PWM period is 100 (microseconds),
-// the highest resolution possible is 100.
-// also be careful of off-by-one errors.
+volatile unsigned int ultrasonic_pulse_us;
+// width of pulse from ultrasonic sensor, in microseconds
 
-main() {
-  WDTCTL = STOP_WATCHDOG; // Stop the watchdog timer
-  PM5CTL0 = ENABLE_PINS;  // Required to use inputs and outputs
+volatile unsigned int ir_on;
+volatile unsigned int ir_off;
+volatile int ir_state; // 0 for off, 1 for on. volatile
 
-  P9DIR |= GREEN_LED;    // P9.7 will be output for green LED
-  P9OUT &= ~(GREEN_LED); // Drive LED off
+void main(void) {
+  WDTCTL = WDTPW | WDTHOLD; // Stop WDT
 
   //**********************
-  //* Motor Driver Setup
+  //* GPIO Setup
   //**********************
-  P1DIR |= M1EN1;
-  P2DIR |= M1EN2;
 
-  P1OUT &= ~M1EN1;
-  P2OUT |= M1EN2;
+  PM5CTL0 = ENABLE_PINS; // Enable inputs and outputs
 
   //**********************
-  //* PWM Output Setup
-  //* Using Timer A 0
+  //* LED Driver Setup
+  //* Driver on pin P9.7
   //**********************
-  SMCLK_SetTo1MHz();               // 1 MHz freqency = 1 us period
-  TA0CTL = TASSEL__SMCLK | MC__UP; // Set SMCLK, UP MODE
+  P9DIR = IR_LED;     // P9.7 will be output for green LED
+  P9OUT &= ~(IR_LED); // Drive LED off
 
-  TA0CCR0 = 99;
-  // Timer fires every 100 ticks, so PWM period period is 100 us (10kHz).
-  TA0CCR1 = 0;      // PWM duty cycle is 0% initially.
-  TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set) for PWM
+  //**********************
+  //* Clock Configuration
+  //**********************
+  SwitchToLFXT();
+  SMCLK_SetTo1MHz();
 
-  TA0CTL |= TACLR;        // Timer starts at 0
-  TA0CTL &= ~(TIMER_OFF); // Timer starts as off
+  //******************************************************************
+  //* Ultrasonic Sensor
+  //* Trigger Output Setup
+  //* Timer A 0 controls the trigger input to the ultrasonic sensor.
+  //* Runs at 1 MHz in up mode, output mode 7.
+  //* Sends a (at least) 10 us pulse every 60 ms (60,000 us).
+  //* Outputs these pulses on P1.6.
+  //******************************************************************
+  TA0CCR0 = 60000;  // PWM period period is 60,000 us.
+  TA0CCR1 = 100;    // PWM duty cycle is on for at least 10 us.
+  TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
-  // Tie P1.6 to PWM output
-  P1SELC |= BIT6; // Set bits P1SEL1.6 and P1SEL0.1 simultaneously
+  TA0CTL = SMCLK | UP;   // Set SMCLK, UP MODE
+  TA0CTL |= TIMER_CLEAR; // Timer starts at 0
+
+  // GPIO Output
+  P1SELC |= BIT6; // Set bits P1SEL1.6 and P1SEL0.6 simultaneously
   P1DIR |= BIT6;  // P1.6 is an output
 
-  //***********************************************************************
-  //* Incrementor Setup
-  //* Using Timer A 1
-  //* Timer goes off at certain intervals to periodically
-  //* increment the PWM signal's duty cycle over the course of 10 seconds.
-  //***********************************************************************
-  SwitchToLFXT();
-  TA1CTL = TASSEL__ACLK | MC__UP; // Set ACLK , UP mode
+  //******************************************************************
+  //* Ultrasonic Sensor
+  //* Echo Input Setup
+  //* Pin P1.3 receives pulses from the ultrasonic sensor and generates
+  //* interrupts.
+  //* Timer A 1 measures the width of the echo pulse.
+  //******************************************************************
+  TA1CTL = SMCLK | MC__CONTINOUS; // Set SMCLK, CONTINUOUS MODE
+  TA1CTL &= ~(TIMER_OFF);         // Timer starts as off
+  TA1CTL |= TIMER_CLEAR;          // Timer starts at 0
 
-  TA1EX0 |= CLOCK_SCALAR - 1; // prescalar of 8 (we subtract 1 because of how
-                              // the register values are defined)
+  // GPIO Input
+  P1IE = BIT3;      // Enable interrupt for P1.3
+  P1IES &= ~(BIT3); // Start by looking for rising edges
+  P1IFG = 0x00;     // Ensure no interrupts are pending
 
-  /*
-  For some reason, the formula is not working, but TA1CCR0 should equal:
-  (RAMP_TIME/RESOLUTION) * 1000000 / (CLOCK_SCALAR * 30.6)
-  */
-  TA1CCR0 = 817;
-  // Timer goes off RESOLUTION times in RAMP_TIME seconds, accounting for a
-  // clock scalar of CLOCK_SCALAR.
+  //**********************
+  //* Timer A 2 Setup
+  //* The LCD display gets updated with the latest IR sensor reading from the
+  // ADC
+  //* whenever this timer interrupt goes off.
+  //**********************
+  unsigned int clock_scalar = 0b111; // eigth scalar
+  unsigned int clock_count = 4096;
+  TA2EX0 = clock_scalar; // Sets the clock scalar value for Timer_2
+  TA2CCR0 = clock_count; // Sets value of Timer_2
+  TA2CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_2
+  TA2CCTL0 = CCIE;       // Enable interrupt for Timer_2
 
-  TA1CTL |= TACLR;        // Timer starts at 0
-  TA1CTL &= ~(TIMER_OFF); // Timer starts as off
-  TA1CCTL0 = CCIE;        // Enable interrupt for Timer_1
+  //**********************
+  //* Left and Right Motor Driver Setup
+  //**********************
+  // TODO set up motor GPIO pins
 
-  //*************************************************
-  //* Button Setup
-  //* Button 1 (P1.1) is used to turn the motor on.
-  //* Button 2 (P1.2) is used to turn the motor off.
-  //* These buttons are only enabled after the motor is completely spun up or
-  // down.
-  //*************************************************
-  P1OUT |= BUTTON1 | BUTTON2; // P1.1 and P1.2 will be an input
-  P1REN |= BUTTON1 | BUTTON2; // with a pull-up resistor
+  //**********************
+  //* Left and Right Motor PWM Output Setup
+  //* Using Timer A X
+  //**********************
+  // refer to Lab09 for how to set up
+  // TODO
 
-  P1IE |= BUTTON1; // Enable interrupt for button 1 (but not button 2)
-  P1IES &= ~(BUTTON1 | BUTTON2); // look for rising edges
-  P1IFG = 0x00;                  // Ensure no interrupts are pending
+  //**********************
+  //* LCD Setup
+  //**********************
+  initGPIO();   // Initializes General Purpose Inputs and Outputs for LCD
+  initClocks(); // Initialize clocks for LCD
+  myLCD_init(); // Prepares LCD to receive commands
 
-  __enable_interrupt();
+  //**********************
+  //* ADC Setup
+  //**********************
+  ADC_SETUP();
+  ADC12IER0 = ADC12IE0; // Enable ADC interrupt
+  __enable_interrupt(); // Activate interrupts previously enabled
 
-  while (1)
-    ;
+  ir_state = 1;
+  P9OUT |= IR_LED;                  // turn on IR LED
+  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
+  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+
+  while (1) {
+  }
+}
+
+void ADC_SETUP(void) {
+#define ADC12_SHT_16 0x0200      // 16 clock cycles for sample and hold
+#define ADC12_SHT_128 0x0600     // 128 clock cycles for sample and hold
+#define ADC12_SHT_512 0x0A00     // 128 clock cycles for sample and hold
+#define ADC12_ON 0x0010          // Used to turn ADC12 peripheral on
+#define ADC12_SHT_SRC_SEL 0x0200 // Selects source for sample & hold
+#define ADC12_12BIT 0x0020       // Selects 12-bits of resolution
+#define ADC12_P92 0x000A         // Use input P9.2 for analog input
+
+  ADC12CTL0 = ADC12_SHT_512 | ADC12_ON; // Turn on, set sample & hold time
+  ADC12CTL1 = ADC12_SHT_SRC_SEL;        // Specify sample & hold clock source
+  ADC12CTL2 = ADC12_12BIT;              // 12-bit conversion results
+  ADC12MCTL0 = ADC12_P92;               // P9.2 is analog input
 }
 
 //***********************************************************************
 //* Port 1 Interrupt Service Routine
-//* Buttons 1 and 2
+//* (Ultrasonic Sensor Pulses)
 //***********************************************************************
 #pragma vector = PORT1_VECTOR
 __interrupt void Port_1(void) {
-  int buttonInterupt = P1IV;
-  if (buttonInterupt == 0x4) { // check that P1.1 is the source of the interrupt
-    // toggle the direction the motor spins
-    P1OUT ^= M1EN1;
-    P2OUT ^= M1EN2;
-    // set motor speed to increase
-    dutycycle_direction = 1;
-    // make sure motor speed is currently at 0%
-    TA0CCR1 = 0;
-
-    TA0CTL |= MC__UP; // enable PWM output
-
-    TA1CTL |= TACLR;  // clear pwm increment timer
-    TA1CTL |= MC__UP; // start pwm increment timer
-
-    P1IE &= ~(BUTTON1); // disable interrupt for button 1
-  } else if (buttonInterupt ==
-             0x6) { // check that P1.2 was the source of the interrupt
-    // set motor speed to decrease
-    dutycycle_direction = -1;
-    // make sure motor speed is currently 100%
-    TA0CCR1 = 100;
-
-    TA0CTL |= MC__UP; // enable PWM output
-
-    TA1CTL |= TACLR;  // clear pwm increment timer
-    TA1CTL |= MC__UP; // start pwm increment timer
-
-    P1IE &= ~(BUTTON2); // disable interrupt for button 2
-  }
-}
-
-//************************************************************************
-// Timer A 1 Interrupt Service Routine
-// Updating PWM duty cycle
-//************************************************************************
-#pragma vector = TIMER1_A0_VECTOR
-__interrupt void Timer1_ISR(void) {
-  P9OUT ^= GREEN_LED;
-
-  TA0CCR1 += dutycycle_direction * 100 / RESOLUTION;
-  if (TA0CCR1 <= 0 || TA0CCR1 >= 100) {
-    TA1CTL &= ~(TIMER_OFF); // motor has reached final speed.  stop the timer
-    // enable a button
-    if (dutycycle_direction == -1) {
-      P1IFG =
-          0; // clear all interrupts before re-enabling button because bounce
-      P1IE |= BUTTON1;
-    } else if (dutycycle_direction == 1) {
-      P1IFG =
-          0; // clear all interrupts before re-enabling button because bounce
-      P1IE |= BUTTON2;
+  if (P1IV == 0x8) { // check that port P1.3 is the source of the interrupt
+    if (!(P1IES & BIT3)) {     // Rising edge detected
+      TA1CTL |= MC__CONTINOUS; // start the timer
+      P1IES |= BIT3;           // searching for falling edge next
+    } else {
+      TA1CTL &= ~(TIMER_OFF);     // Turn timer off
+      ultrasonic_pulse_us = TA1R; // Save reading
+      TA1CTL |= TIMER_CLEAR;      // clear timer
+      P1IES &= ~(BIT3);           // searching for rising edge next
     }
   }
 }
 
-//***********************************************************************************************
-void SMCLK_SetTo1MHz(void) // Switches SMCLK to DCO at 1MHz
-//***********************************************************************************************
-{
-#define DIVS_7 0x0070
+//************************************************************************
+//* ADC12 Interrupt Service Routine
+//************************************************************************
+#pragma vector = ADC12_VECTOR
+__interrupt void ADC12_ISR(void) {
+  // interrupt flag is cleared by accessing this value
+  int adc_reading = ADC12MEM0;
 
-  CSCTL0_H = CSKEY_H; // unlock CS registers
+  if (ir_state == 1) {
+    // ir_on_sum += adc_reading;
+    // ir_on_sum -= ir_on_value[num_readings];
+    // ir_on_value[num_readings] = adc_reading;
+    // num_readings++;
+    // num_readings = num_readings % NUM_AVG;
 
-  CSCTL1 = (CSCTL1 & ~(DCORSEL | DCOFSEL_7)) |
-           DCOFSEL_0; // The digitally controlled oscillator (DCO)
-  // is an internal high frequency signal that
-  // can be mapped to the SMCLK for Timer A.
-  // This command ensures DCO is at 1MHz
+    ir_on = adc_reading;
 
-  CSCTL2 =
-      (CSCTL2 & ~SELS_3) | SELS__DCOCLK; // Route SMCLK = DCO (don’t touch ACLK)
+    P9OUT &= ~(IR_LED); // Turn LED off
+    ir_state = 0;
+  } else {
+    ir_off = adc_reading;
 
-  CSCTL3 = (CSCTL3 & ~DIVS_7) | DIVS__1; // DCO is 1MHz, so SMCLK will be 1MHz
+    P9OUT |= IR_LED; // Turn LED on
+    ir_state = 1;
+  }
+  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
+  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+}
 
-  SFRIFG1 &= ~OFIFG; // Clear oscillator fault flags
+/**
+ * Timer A 2 Interrupt
+ * Updates the LCD display with the latest IR sensor reading from the ADC
+ * every time the timer goes off.
+ */
+#pragma vector = TIMER2_A0_VECTOR
+__interrupt void Timer2_ISR(void) {
 
-  CSCTL0_H = 0; // lock CS registers
+  unsigned long dist = ir_on - ir_off;
+
+  // dist = ((5600 / dist) + 1.52) * 100;
+
+  if (ir_on > ir_off) {
+    myLCD_showSymbol(LCD_CLEAR, LCD_NEG, 0);
+    myLCD_displayNumber(dist);
+  } else {
+    myLCD_displayNumber(dist);
+    myLCD_showSymbol(LCD_UPDATE, LCD_NEG, 0);
+  }
+  myLCD_showSymbol(LCD_UPDATE, LCD_A4DP, 0);
 }
 
 #define SELA_MASK 0x0300
@@ -215,4 +240,27 @@ void SwitchToLFXT(void)
   CSCTL1 = (CSCTL1 & ~SELA_MASK) |
            SELA__LFXTCLK; // Use 32.768kHz LFXT signal as input to ACLK
   CSCTL0_H = 0;           // Lock Clock Select (CS) registers
+}
+//***********************************************************************************************
+void SMCLK_SetTo1MHz(void) // Switches SMCLK to DCO at 1MHz
+//***********************************************************************************************
+{
+#define DIVS_7 0x0070
+
+  CSCTL0_H = CSKEY_H; // unlock CS registers
+
+  CSCTL1 = (CSCTL1 & ~(DCORSEL | DCOFSEL_7)) |
+           DCOFSEL_0; // The digitally controlled oscillator (DCO)
+  // is an internal high frequency signal that
+  // can be mapped to the SMCLK for Timer A.
+  // This command ensures DCO is at 1MHz
+
+  CSCTL2 =
+      (CSCTL2 & ~SELS_3) | SELS__DCOCLK; // Route SMCLK = DCO (don’t touch ACLK)
+
+  CSCTL3 = (CSCTL3 & ~DIVS_7) | DIVS__1; // DCO is 1MHz, so SMCLK will be 1MHz
+
+  SFRIFG1 &= ~OFIFG; // Clear oscillator fault flags
+
+  CSCTL0_H = 0; // lock CS registers
 }
