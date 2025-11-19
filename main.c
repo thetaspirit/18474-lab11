@@ -15,7 +15,24 @@
 #define TIMER_CLEAR 0x4      // Set this bit to clear the count of Timer_A
 #define ENABLE_PINS 0xFFFE   // Required to use inputs and outputs
 
-#define IR_LED BIT3 // P4.3 will be output for IR LED
+#define ADC12_SHT_16 0x0200      // 16 clock cycles for sample and hold
+#define ADC12_SHT_128 0x0600     // 128 clock cycles for sample and hold
+#define ADC12_SHT_512 0x0A00     // 128 clock cycles for sample and hold
+#define ADC12_ON 0x0010          // Used to turn ADC12 peripheral on
+#define ADC12_SHT_SRC_SEL 0x0200 // Selects source for sample & hold
+#define ADC12PDIV_64 0x6000      // Sets clock source prescalar to divide by 64
+#define ADC12_12BIT 0x0020       // Selects 12-bits of resolution
+#define ADC12_P92 0x000A         // Use input P9.2 for analog input
+#define ADC12_P84 0b00111        // Use input P8.4 for analog input
+
+#define IR_LED BIT3             // P4.3 will be output for IR LED
+#define IR_PHOTO_FAR ADC12_P84  // P8.4 is used as the ADC input
+#define IR_PHOTO_NEAR ADC12_P92 // P9.2 is used as the ADC input
+
+#define IR_NEAR_SETPOINT // the PID setpoint for the value of the near-range IR
+                         // photodiode reading
+#define IR_FAR_SETPOINT  // the PID setpoint for the value of the far-range IR
+                         // photodiode reading
 
 #define ML_EN1 BIT6 // P2.6
 #define ML_EN2 BIT7 // P2.7
@@ -42,9 +59,15 @@ void set_right_motor(
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
 
-volatile unsigned int ir_on;
-volatile unsigned int ir_off;
-volatile int ir_state; // 0 for off, 1 for on. volatile
+volatile unsigned int ir_near_on;  // ADC register value when the IR LED is on,
+                                   // from the near-range IR photodiode
+volatile unsigned int ir_near_off; // ADC register value when the IR LED is off,
+                                   // from the near-range IR photodiode
+volatile unsigned int ir_far_on;   // ADC register value when the IR LED is on,
+                                   // from the far-range IR photodiode
+volatile unsigned int ir_far_off;  // ADC register value when the IR LED is off,
+                                   // from the far-range IR photodiode
+volatile int ir_state;             // 0 for off, 1 for on. volatile
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -52,7 +75,6 @@ void main(void) {
   //**********************
   //* GPIO Setup
   //**********************
-
   PM5CTL0 = ENABLE_PINS; // Enable inputs and outputs
 
   //**********************
@@ -64,13 +86,16 @@ void main(void) {
   //**********************
   //* ADC Setup
   //* Controlls the IR LED and photodiode
+  //* Runs at a period of about 7.5 ms
+  // TODO re-structure code here to decouple the ADC "thread" business from the
+  // ADC interrupt
   //**********************
-  // ADC_SETUP();
-  // ADC12IER0 = ADC12IE0; // Enable ADC interrupt
-  // ir_state = 1;
-  // set_ir_led(true);                 // turn on IR LED
-  // ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
-  // ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+  ADC_SETUP();
+  ADC12IER0 = ADC12IE0; // Enable ADC interrupt
+  ir_state = 1;
+  set_ir_led(true);      // turn on IR LED
+  ADC12CTL0 |= ADC12ENC; // Enable conversion
+  ADC12CTL0 |= ADC12SC;  // Start conversion
 
   //**********************
   //* Clock Configuration
@@ -148,8 +173,8 @@ __interrupt void ADC12_ISR(void) {
     set_ir_led(true);
     ir_state = 1;
   }
-  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
-  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+  ADC12CTL0 |= ADC12ENC; // Enable conversion
+  ADC12CTL0 |= ADC12SC;  // Start conversion
 }
 
 /**
@@ -197,18 +222,11 @@ void ULTRASONIC_SETUP(void) {
 }
 
 void ADC_SETUP(void) {
-#define ADC12_SHT_16 0x0200      // 16 clock cycles for sample and hold
-#define ADC12_SHT_128 0x0600     // 128 clock cycles for sample and hold
-#define ADC12_SHT_512 0x0A00     // 128 clock cycles for sample and hold
-#define ADC12_ON 0x0010          // Used to turn ADC12 peripheral on
-#define ADC12_SHT_SRC_SEL 0x0200 // Selects source for sample & hold
-#define ADC12_12BIT 0x0020       // Selects 12-bits of resolution
-#define ADC12_P92 0x000A         // Use input P9.2 for analog input
+  ADC12CTL0 = ADC12_SHT_16 | ADC12_ON; // Turn on, set sample & hold time
+  ADC12CTL1 = ADC12_SHT_SRC_SEL;       // Specify sample & hold clock source
+  ADC12CTL2 = ADC12_12BIT;             // 12-bit conversion results
 
-  ADC12CTL0 = ADC12_SHT_512 | ADC12_ON; // Turn on, set sample & hold time
-  ADC12CTL1 = ADC12_SHT_SRC_SEL;        // Specify sample & hold clock source
-  ADC12CTL2 = ADC12_12BIT;              // 12-bit conversion results
-  ADC12MCTL0 = ADC12_P92;               // P9.2 is analog input
+  ADC12MCTL0 = ADC12_P92; // P9.2 is analog input to ADC12MEM0
 }
 
 void MOTOR_SETUP(void) {
