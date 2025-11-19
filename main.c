@@ -15,12 +15,29 @@
 #define TIMER_CLEAR 0x4      // Set this bit to clear the count of Timer_A
 #define ENABLE_PINS 0xFFFE   // Required to use inputs and outputs
 
-#define IR_LED BIT7 // P9.7 will be output for IR LED (it's also the green LED)
+#define IR_LED BIT3 // P4.3 will be output for IR LED
+
+#define ML_EN1 BIT6 // P2.6
+#define ML_EN2 BIT7 // P2.7
+#define ML_PWM BIT3 // P3.3
+
+#define MR_EN1 BIT4 // P2.4
+#define MR_EN2 BIT5 // P2.5
+#define MR_PWM BIT7 // P4.7
 
 void ADC_SETUP(void);       // Used to setup ADC12 peripheral
 void SwitchToLFXT(void);    // Switches ACLK to Low Frequency eXTernal crystal
                             // (LFXT) at 32.768kHz
 void SMCLK_SetTo1MHz(void); // Switches SMCLK to DCO at 1MHz
+
+void ULTRASONIC_SETUP(void); // set up pins and timers for ultrasonic sensor
+void MOTOR_SETUP(void);      // sets up pins and timer for motor outputs
+
+void set_ir_led(bool); // turn IR LED on (true) or off (false)
+void set_left_motor(
+    int); // set left motor to given direction and PWM, value -100 to 100
+void set_right_motor(
+    int); // set right motor to given direction and PWM, value -100 to 100
 
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
@@ -40,10 +57,20 @@ void main(void) {
 
   //**********************
   //* LED Driver Setup
-  //* Driver on pin P9.7
   //**********************
-  P9DIR = IR_LED;     // P9.7 will be output for green LED
-  P9OUT &= ~(IR_LED); // Drive LED off
+  P4DIR = IR_LED;    // P4.3 is output for IR LED
+  set_ir_led(false); // Drive LED off
+
+  //**********************
+  //* ADC Setup
+  //* Controlls the IR LED and photodiode
+  //**********************
+  // ADC_SETUP();
+  // ADC12IER0 = ADC12IE0; // Enable ADC interrupt
+  // ir_state = 1;
+  // set_ir_led(true);                 // turn on IR LED
+  // ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
+  // ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
 
   //**********************
   //* Clock Configuration
@@ -51,6 +78,88 @@ void main(void) {
   SwitchToLFXT();
   SMCLK_SetTo1MHz();
 
+  //**********************
+  //* Ultrasonic Sensor Setup
+  //**********************
+  ULTRASONIC_SETUP();
+
+  //**********************
+  //* Motor Setup
+  //**********************
+  MOTOR_SETUP();
+
+  //**********************
+  //* Timer A 3 Setup
+  //* This is basically the main loop, runs periodically.
+  //**********************
+  unsigned int clock_scalar = 0b111; // eigth scalar
+  unsigned int clock_count = 4096;
+  TA3EX0 = clock_scalar; // Sets the clock scalar value for Timer_3
+  TA3CCR0 = clock_count; // Sets value of Timer_3
+  TA3CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_3
+  TA3CCTL0 = CCIE;       // Enable interrupt for Timer_3
+
+  __enable_interrupt(); // Activate interrupts previously enabled
+
+  while (1) {
+    // TODO convert speed and steering values to PWM values
+    // TODO apply PWM values to motors
+    set_left_motor(-50);
+    set_right_motor(-50);
+  }
+}
+
+//***********************************************************************
+//* Port 1 Interrupt Service Routine
+//* Measures pulse width from the ultrasonic sensor's echo pin
+//* Using Timer A 2
+//***********************************************************************
+#pragma vector = PORT1_VECTOR
+__interrupt void Port_1(void) {
+  if (P1IV == 0x8) { // check that port P1.3 is the source of the interrupt
+    if (!(P1IES & BIT3)) {     // Rising edge detected
+      TA2CTL |= MC__CONTINOUS; // start the timer
+      P1IES |= BIT3;           // searching for falling edge next
+    } else {
+      TA2CTL &= ~(TIMER_OFF);     // Turn timer off
+      ultrasonic_pulse_us = TA2R; // Save reading
+      TA2CTL |= TIMER_CLEAR;      // clear timer
+      P1IES &= ~(BIT3);           // searching for rising edge next
+    }
+  }
+}
+
+//************************************************************************
+//* ADC12 Interrupt Service Routine
+//************************************************************************
+#pragma vector = ADC12_VECTOR
+__interrupt void ADC12_ISR(void) {
+  // interrupt flag is cleared by accessing this value
+  int adc_reading = ADC12MEM0;
+
+  if (ir_state == 1) {
+    ir_on = adc_reading;
+
+    set_ir_led(false);
+    ir_state = 0;
+  } else {
+    ir_off = adc_reading;
+
+    set_ir_led(true);
+    ir_state = 1;
+  }
+  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
+  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+}
+
+/**
+ * Timer A 3 Interrupt
+ * Reads sensor values and calculates control outputs
+ */
+#pragma vector = TIMER3_A0_VECTOR
+__interrupt void Timer3_ISR(void) {}
+
+void ULTRASONIC_SETUP(void) {
   //******************************************************************
   //* Ultrasonic Sensor
   //* Trigger Output Setup
@@ -85,53 +194,6 @@ void main(void) {
   P1IE = BIT3;      // Enable interrupt for P1.3
   P1IES &= ~(BIT3); // Start by looking for rising edges
   P1IFG = 0x00;     // Ensure no interrupts are pending
-
-  //**********************
-  //* Timer A 2 Setup
-  //* The LCD display gets updated with the latest IR sensor reading from the
-  // ADC
-  //* whenever this timer interrupt goes off.
-  //**********************
-  // unsigned int clock_scalar = 0b111; // eigth scalar
-  // unsigned int clock_count = 4096;
-  // TA2EX0 = clock_scalar; // Sets the clock scalar value for Timer_2
-  // TA2CCR0 = clock_count; // Sets value of Timer_2
-  // TA2CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_2
-  // TA2CCTL0 = CCIE;       // Enable interrupt for Timer_2
-
-  //**********************
-  //* Left and Right Motor Driver Setup
-  //**********************
-  // TODO set up motor GPIO pins
-
-  //**********************
-  //* Left and Right Motor PWM Output Setup
-  //* Using Timer A X
-  //**********************
-  // refer to Lab09 for how to set up
-  // TODO
-
-  //**********************
-  //* LCD Setup
-  //**********************
-  initGPIO();   // Initializes General Purpose Inputs and Outputs for LCD
-  initClocks(); // Initialize clocks for LCD
-  myLCD_init(); // Prepares LCD to receive commands
-
-  //**********************
-  //* ADC Setup
-  //**********************
-  ADC_SETUP();
-  ADC12IER0 = ADC12IE0; // Enable ADC interrupt
-  __enable_interrupt(); // Activate interrupts previously enabled
-
-  ir_state = 1;
-  P9OUT |= IR_LED;                  // turn on IR LED
-  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
-  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
-
-  while (1) {
-  }
 }
 
 void ADC_SETUP(void) {
@@ -149,75 +211,78 @@ void ADC_SETUP(void) {
   ADC12MCTL0 = ADC12_P92;               // P9.2 is analog input
 }
 
-//***********************************************************************
-//* Port 1 Interrupt Service Routine
-//* Measures pulse width from the ultrasonic sensor's echo pin
-//* Using Timer A 2
-//***********************************************************************
-#pragma vector = PORT1_VECTOR
-__interrupt void Port_1(void) {
-  if (P1IV == 0x8) { // check that port P1.3 is the source of the interrupt
-    if (!(P1IES & BIT3)) {     // Rising edge detected
-      TA2CTL |= MC__CONTINOUS; // start the timer
-      P1IES |= BIT3;           // searching for falling edge next
-    } else {
-      TA2CTL &= ~(TIMER_OFF);     // Turn timer off
-      ultrasonic_pulse_us = TA2R; // Save reading
-      TA2CTL |= TIMER_CLEAR;      // clear timer
-      P1IES &= ~(BIT3);           // searching for rising edge next
-    }
+void MOTOR_SETUP(void) {
+  //**********************
+  //* Left and Right Motor PWM Output Setup
+  //* Using Timer A 1
+  //**********************
+  TA1CTL = TASSEL__SMCLK | MC__UP; // Set SMCLK, UP MODE
+                                   // 1 MHz freqency = 1 us period
+
+  TA1CCR0 = 99;
+  // Timer fires every 100 ticks, so PWM period period is 100 us (10kHz).
+
+  TA1CCR1 = 0;      // PWM duty cycle is 0% initially.
+  TA1CCTL1 |= 0xE0; // Output Mode 7 (reset/set) for PWM
+
+  TA1CCR2 = 0;      // PWM duty cycle is 0% initially.
+  TA1CCTL2 |= 0xE0; // Output Mode 7 (reset/set) for PWM
+
+  TA1CTL |= TACLR;        // Timer starts at 0
+  TA1CTL &= ~(TIMER_OFF); // Timer starts as off
+  TA1CTL |= MC__UP;       // Turn on timer to enable PWM output
+
+  // Tie P3.3 to PWM output
+  P3SEL1 |= BIT3;  // Set bit P3SEL1.3, but not bit P3SEL0.3
+  P3DIR |= ML_PWM; // P3.3 is an output
+
+  // Tie P4.7 to PWM output
+  P4SELC |= BIT7;  // Set bits P4SEL1.7 and P4SEL0.7 simultaneously
+  P4DIR |= MR_PWM; // P4.7 is an output
+
+  //**********************
+  //* Left and Right Motor Input Pin Setup
+  //**********************
+  // left motor enable pins configured as outputs
+  P2DIR |= ML_EN1;
+  P2DIR |= ML_EN2;
+
+  // right motor enable pins configured as outputs
+  P2DIR |= MR_EN1;
+  P2DIR |= MR_EN2;
+
+  set_left_motor(0);
+  set_right_motor(0);
+}
+
+void set_ir_led(bool state) {
+  if (!state) {
+    P4OUT &= ~(IR_LED); // Drive LED off
+  } else {
+    P4OUT |= IR_LED; // Turn LED on
   }
 }
 
-//************************************************************************
-//* ADC12 Interrupt Service Routine
-//************************************************************************
-#pragma vector = ADC12_VECTOR
-__interrupt void ADC12_ISR(void) {
-  // interrupt flag is cleared by accessing this value
-  int adc_reading = ADC12MEM0;
-
-  if (ir_state == 1) {
-    // ir_on_sum += adc_reading;
-    // ir_on_sum -= ir_on_value[num_readings];
-    // ir_on_value[num_readings] = adc_reading;
-    // num_readings++;
-    // num_readings = num_readings % NUM_AVG;
-
-    ir_on = adc_reading;
-
-    P9OUT &= ~(IR_LED); // Turn LED off
-    ir_state = 0;
-  } else {
-    ir_off = adc_reading;
-
-    P9OUT |= IR_LED; // Turn LED on
-    ir_state = 1;
+void set_left_motor(int speed) {
+  P2OUT |= ML_EN1;
+  P2OUT &= ~(ML_EN2);
+  if (speed < 0) {
+    P2OUT &= ~(ML_EN1);
+    P2OUT |= ML_EN2;
+    speed *= -1;
   }
-  ADC12CTL0 = ADC12CTL0 | ADC12ENC; // Enable conversion
-  ADC12CTL0 = ADC12CTL0 | ADC12SC;  // Start conversion
+  TA1CCR2 = speed;
 }
 
-/**
- * Timer A 2 Interrupt
- * Updates the LCD display with the latest IR sensor reading from the ADC
- * every time the timer goes off.
- */
-#pragma vector = TIMER2_A0_VECTOR
-__interrupt void Timer2_ISR(void) {
-
-  unsigned long dist = ir_on - ir_off;
-
-  // dist = ((5600 / dist) + 1.52) * 100;
-
-  if (ir_on > ir_off) {
-    myLCD_showSymbol(LCD_CLEAR, LCD_NEG, 0);
-    myLCD_displayNumber(dist);
-  } else {
-    myLCD_displayNumber(dist);
-    myLCD_showSymbol(LCD_UPDATE, LCD_NEG, 0);
+void set_right_motor(int speed) {
+  P2OUT |= MR_EN1;
+  P2OUT &= ~(MR_EN2);
+  if (speed < 0) {
+    P2OUT &= ~(MR_EN1);
+    P2OUT |= MR_EN2;
+    speed *= -1;
   }
-  myLCD_showSymbol(LCD_UPDATE, LCD_A4DP, 0);
+  TA1CCR1 = speed;
 }
 
 #define SELA_MASK 0x0300
