@@ -51,6 +51,7 @@ void ULTRASONIC_SETUP(void); // set up pins and timers for ultrasonic sensor
 void MOTOR_SETUP(void);      // sets up pins and timer for motor outputs
 
 void set_ir_led(bool); // turn IR LED on (true) or off (false)
+void read_ir(void); // pulses IR LED, and sets volatile values from ADC outputs
 void set_left_motor(
     int); // set left motor to given direction and PWM, value -100 to 100
 void set_right_motor(
@@ -68,6 +69,8 @@ volatile unsigned int ir_far_on;   // ADC register value when the IR LED is on,
 volatile unsigned int ir_far_off;  // ADC register value when the IR LED is off,
                                    // from the far-range IR photodiode
 volatile int ir_state;             // 0 for off, 1 for on. volatile
+volatile bool ir_measure_pending;  // used for waiting until the ADC is done
+                                   // measuring IR intensity
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -86,16 +89,10 @@ void main(void) {
   //**********************
   //* ADC Setup
   //* Controlls the IR LED and photodiode
-  //* Runs at a period of about 7.5 ms
-  // TODO re-structure code here to decouple the ADC "thread" business from the
   // ADC interrupt
   //**********************
   ADC_SETUP();
-  ADC12IER0 = ADC12IE0; // Enable ADC interrupt
-  ir_state = 1;
-  set_ir_led(true);      // turn on IR LED
-  ADC12CTL0 |= ADC12ENC; // Enable conversion
-  ADC12CTL0 |= ADC12SC;  // Start conversion
+  ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
 
   //**********************
   //* Clock Configuration
@@ -125,12 +122,10 @@ void main(void) {
   TA3CCTL0 = CCIE;       // Enable interrupt for Timer_3
 
   __enable_interrupt(); // Activate interrupts previously enabled
-
+  read_ir();
   while (1) {
     // TODO convert speed and steering values to PWM values
     // TODO apply PWM values to motors
-    set_left_motor(-50);
-    set_right_motor(-50);
   }
 }
 
@@ -160,21 +155,38 @@ __interrupt void Port_1(void) {
 #pragma vector = ADC12_VECTOR
 __interrupt void ADC12_ISR(void) {
   // interrupt flag is cleared by accessing this value
-  int adc_reading = ADC12MEM0;
+  int adc0_reading = ADC12MEM0;
+  int adc1_reading = ADC12MEM1;
 
   if (ir_state == 1) {
-    ir_on = adc_reading;
+    ir_near_on = adc0_reading;
+    ir_far_on = adc1_reading;
 
     set_ir_led(false);
     ir_state = 0;
+
+    ADC12CTL0 |= ADC12ENC; // Enable conversion
+    ADC12CTL0 |= ADC12SC;  // Start conversion
   } else {
-    ir_off = adc_reading;
+    ir_near_off = adc0_reading;
+    ir_far_off = adc1_reading;
 
     set_ir_led(true);
     ir_state = 1;
+    ir_measure_pending = false;
   }
+}
+
+void read_ir(void) {
+  ir_state = 1;
+  set_ir_led(true); // turn on IR LED
+  ir_measure_pending = true;
   ADC12CTL0 |= ADC12ENC; // Enable conversion
   ADC12CTL0 |= ADC12SC;  // Start conversion
+  while (ir_measure_pending) {
+    continue;
+  }
+  return;
 }
 
 /**
@@ -222,11 +234,16 @@ void ULTRASONIC_SETUP(void) {
 }
 
 void ADC_SETUP(void) {
-  ADC12CTL0 = ADC12_SHT_16 | ADC12_ON; // Turn on, set sample & hold time
-  ADC12CTL1 = ADC12_SHT_SRC_SEL;       // Specify sample & hold clock source
-  ADC12CTL2 = ADC12_12BIT;             // 12-bit conversion results
+  ADC12CTL0 |= ADC12_SHT_128 | ADC12_ON; // Turn on, set sample & hold time
+  ADC12CTL0 |= ADC12MSC;
+  ADC12CTL1 |= ADC12_SHT_SRC_SEL; // Specify sample & hold clock source
+  ADC12CTL2 |= ADC12_12BIT;       // 12-bit conversion results
 
-  ADC12MCTL0 = ADC12_P92; // P9.2 is analog input to ADC12MEM0
+  ADC12MCTL0 |= IR_PHOTO_NEAR; // P9.2 is analog input to ADC12MEM0 (near)
+  ADC12MCTL1 |= IR_PHOTO_FAR;  // P8.4 is analog input to ADC12MEM1 (far)
+
+  ADC12CTL1 |= 0b010;     // set to sequence-of-channels (autoscan) mode
+  ADC12MCTL1 |= ADC12EOS; // MEM1 is the last conversion in the sequence
 }
 
 void MOTOR_SETUP(void) {
