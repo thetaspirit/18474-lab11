@@ -25,7 +25,9 @@
 #define ADC12_P92 0x000A         // Use input P9.2 for analog input
 #define ADC12_P84 0b00111        // Use input P8.4 for analog input
 
-#define IR_LED BIT3             // P4.3 will be output for IR LED
+#define PID_INDICATOR                                                          \
+  BIT0              // P9.0 is used for seeing when the control loop is running
+#define IR_LED BIT3 // P4.3 will be output for IR LED
 #define IR_PHOTO_FAR ADC12_P84  // P8.4 is used as the ADC input
 #define IR_PHOTO_NEAR ADC12_P92 // P9.2 is used as the ADC input
 
@@ -72,6 +74,33 @@ volatile int ir_state;             // 0 for off, 1 for on. volatile
 volatile bool ir_measure_pending;  // used for waiting until the ADC is done
                                    // measuring IR intensity
 
+volatile int
+    forward; // a value from -100 to 100, determing the overall forward speed
+volatile int steer; // a value from -100 (left) to 100 (right) determining the
+                    // steering intensity
+
+#define PID_LOOP_MS 125 // the period of the PID control loop.
+// period is based off of the configuration of Timer A 3
+typedef struct {
+  float k_p;            // Proportional gain
+  float k_i;            // Integral gain
+  float k_d;            // Derivative gain
+  int prev_measurement; // Previous process variable measurement
+  int integral;         // sum of the previous error values
+} pid_controller_t;
+
+pid_controller_t ir_pid = {.k_p = 1.0f,
+                           .k_i = 0.0f,
+                           .k_d = 0.0f,
+                           .prev_measurement = 0,
+                           .integral = 0};
+
+pid_controller_t us_pid = {.k_p = 1.0f,
+                           .k_i = 0.0f,
+                           .k_d = 0.0f,
+                           .prev_measurement = 0,
+                           .integral = 0};
+
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
 
@@ -114,18 +143,24 @@ void main(void) {
   //* Timer A 3 Setup
   //* This is basically the main loop, runs periodically.
   //**********************
-  unsigned int clock_scalar = 0b111; // eigth scalar
+  unsigned int clock_scalar = 0b000;
   unsigned int clock_count = 4096;
   TA3EX0 = clock_scalar; // Sets the clock scalar value for Timer_3
   TA3CCR0 = clock_count; // Sets value of Timer_3
   TA3CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_3
   TA3CCTL0 = CCIE;       // Enable interrupt for Timer_3
 
+  forward = 0;
+  steer = 0;
+
+  P9DIR |= PID_INDICATOR;
+  P9OUT &= ~(PID_INDICATOR);
+
   __enable_interrupt(); // Activate interrupts previously enabled
-  read_ir();
   while (1) {
-    // TODO convert speed and steering values to PWM values
+    // TODO convert forward and steer values to left and right PWM values
     // TODO apply PWM values to motors
+    read_ir();
   }
 }
 
@@ -184,6 +219,7 @@ void read_ir(void) {
   ADC12CTL0 |= ADC12ENC; // Enable conversion
   ADC12CTL0 |= ADC12SC;  // Start conversion
   while (ir_measure_pending) {
+    return;
     continue;
   }
   return;
@@ -194,7 +230,14 @@ void read_ir(void) {
  * Reads sensor values and calculates control outputs
  */
 #pragma vector = TIMER3_A0_VECTOR
-__interrupt void Timer3_ISR(void) {}
+__interrupt void Timer3_ISR(void) {
+  // read ultrasonic sensor
+  // determine forward speed
+
+  // read IR sensor values
+  // determine steer
+  P9OUT ^= PID_INDICATOR;
+}
 
 void ULTRASONIC_SETUP(void) {
   //******************************************************************
