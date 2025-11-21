@@ -15,6 +15,11 @@
 #define TIMER_CLEAR 0x4      // Set this bit to clear the count of Timer_A
 #define ENABLE_PINS 0xFFFE   // Required to use inputs and outputs
 
+#define US_INDICATOR                                                           \
+  BIT1 // P4.1 is used as an indicator for the ultrasonic sensor
+
+#define IR_INDICATOR BIT0 // P4.0 is used as an LED indicator for IR sensor
+
 #define ADC12_SHT_16 0x0200      // 16 clock cycles for sample and hold
 #define ADC12_SHT_128 0x0600     // 128 clock cycles for sample and hold
 #define ADC12_SHT_512 0x0A00     // 128 clock cycles for sample and hold
@@ -61,6 +66,12 @@ void set_right_motor(
 
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
+// Low-pass filtering the ultrasonic sensor
+#define US_FILTER_POWER 2
+#define US_FILTER_SIZE (1 << US_FILTER_POWER)
+volatile unsigned int ultrasonic_filter[US_FILTER_SIZE];
+volatile unsigned int us_filter_sum;
+volatile unsigned char us_filter_idx;
 
 volatile unsigned int ir_near_on;  // ADC register value when the IR LED is on,
                                    // from the near-range IR photodiode
@@ -87,19 +98,22 @@ typedef struct {
   float k_d;            // Derivative gain
   int prev_measurement; // Previous process variable measurement
   int integral;         // sum of the previous error values
+  int setpoint;         // target value
 } pid_controller_t;
 
 pid_controller_t ir_pid = {.k_p = 1.0f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
-                           .integral = 0};
+                           .integral = 0,
+                           .setpoint = 2373 - 7};
 
-pid_controller_t us_pid = {.k_p = 1.0f,
+pid_controller_t us_pid = {.k_p = -100.0f / 1400.0f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
-                           .integral = 0};
+                           .integral = 0,
+                           .setpoint = 580};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -133,6 +147,8 @@ void main(void) {
   //* Ultrasonic Sensor Setup
   //**********************
   ULTRASONIC_SETUP();
+  us_filter_sum = 0;
+  us_filter_idx = 0;
 
   //**********************
   //* Motor Setup
@@ -153,14 +169,38 @@ void main(void) {
   forward = 0;
   steer = 0;
 
+  // DEBUG LEDS
+
   P9DIR |= PID_INDICATOR;
   P9OUT &= ~(PID_INDICATOR);
 
+  P4DIR |= US_INDICATOR;
+  P4OUT &= ~(US_INDICATOR);
+
+  P4DIR |= IR_INDICATOR;
+  P4OUT &= ~(IR_INDICATOR);
+
   __enable_interrupt(); // Activate interrupts previously enabled
   while (1) {
+    // read_ir();
+
+    // Turn LEDs on if we are too close
+    if ((us_filter_sum / US_FILTER_SIZE) < us_pid.setpoint) {
+      P4OUT |= US_INDICATOR;
+    } else {
+      P4OUT &= ~(US_INDICATOR);
+    }
+
+    if (ir_far_on - ir_far_off > ir_pid.setpoint) {
+      P4OUT |= IR_INDICATOR;
+    } else {
+      P4OUT &= ~(IR_INDICATOR);
+    }
+
     // TODO convert forward and steer values to left and right PWM values
     // TODO apply PWM values to motors
-    read_ir();
+    set_left_motor(forward);
+    set_right_motor(forward);
   }
 }
 
@@ -180,6 +220,12 @@ __interrupt void Port_1(void) {
       ultrasonic_pulse_us = TA2R; // Save reading
       TA2CTL |= TIMER_CLEAR;      // clear timer
       P1IES &= ~(BIT3);           // searching for rising edge next
+
+      us_filter_sum -= ultrasonic_filter[us_filter_idx];
+      us_filter_sum += ultrasonic_pulse_us;
+      ultrasonic_filter[us_filter_idx] = ultrasonic_pulse_us;
+      us_filter_idx++;
+      us_filter_idx %= US_FILTER_SIZE;
     }
   }
 }
@@ -236,6 +282,17 @@ __interrupt void Timer3_ISR(void) {
 
   // read IR sensor values
   // determine steer
+  unsigned int filtered_ultrasonic_value = us_filter_sum / US_FILTER_SIZE;
+
+  int us_error = us_pid.setpoint - filtered_ultrasonic_value;
+  float us_output = us_pid.k_p * (float)us_error;
+  if (us_output > 100) {
+    us_output = 100;
+  }
+  if (us_output < -100) {
+    us_output = -100;
+  }
+  forward = us_output;
   P9OUT ^= PID_INDICATOR;
 }
 
@@ -249,7 +306,7 @@ void ULTRASONIC_SETUP(void) {
   //* Outputs these pulses on P1.6.
   //******************************************************************
   TA0CCR0 = 60000;  // PWM period period is 60,000 us.
-  TA0CCR1 = 100;    // PWM duty cycle is on for at least 10 us.
+  TA0CCR1 = 200;    // PWM duty cycle is on for at least 10 us.
   TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
   TA0CTL = SMCLK | UP;   // Set SMCLK, UP MODE
