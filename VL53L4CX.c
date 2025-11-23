@@ -67,5 +67,84 @@ int verify_VL53L4CX() {
     return 1;
 }
 
+unsigned int VL53L4CX_tx_data(unsigned int reg, unsigned int data) {
+    // Disable I2C interupts
+    int tmp_interupt = UCB0IE;
+    UCB0IE = 0;
+
+    int read_value;
+
+    UCB0I2CSA = VL53L4CXADDR;
+
+
+    UCB0CTLW0 |= UCTR | UCTXSTT;    // Set transmit and send start
+
+    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
+    UCB0TXBUF = reg >> 8;           // Put data in tx buf
+    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
+    UCB0TXBUF = reg;                // Put data in tx buf
+    while (!(UCTXIFG0 & UCB0IFG));  // Wait for transmission
+
+    UCB0CTLW0 |= UCTXSTP;
+    UCB0TXBUF = data;                // Put data in tx buf
+
+/*
+    UCB0CTLW0 &= ~UCTR;             // Set to recieve mode
+    UCB0CTLW0 |= UCTXSTT;           // Send start
+    while(!(UCRXIFG0 & UCB0IFG));
+    read_value = UCB0RXBUF;
+    while(!(UCRXIFG0 & UCB0IFG));
+    UCB0CTLW0 |= UCTXNACK;          // Send NACK
+    UCB0CTLW0 |= UCTXSTP;           // Send stop
+    read_value = UCB0RXBUF;
+*/
+
+
+    // Reset I2C interupts
+    UCB0IE = tmp_interupt;
+    return 0;
+}
+
+
+
+
+
+unsigned int VL53L4CX_get_dist_block() {
+    // Disable I2C interupts
+    int tmp_interupt = UCB0IE;
+    UCB0IE = 0;
+
+    //
+    int reg = 0x0096;              // Read register
+
+    int read_value = 0;
+
+    UCB0I2CSA = VL53L4CXADDR;
+
+
+    UCB0CTLW0 |= UCTR | UCTXSTT;    // Set transmit and send start
+
+    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
+    UCB0TXBUF = reg >> 8;           // Put data in tx buf
+    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
+    UCB0TXBUF = reg;                // Put data in tx buf
+    while (!(UCTXIFG0 & UCB0IFG));  // Wait for transmission
+
+    UCB0CTLW0 &= ~UCTR;             // Set to recieve mode
+    UCB0CTLW0 |= UCTXSTT;           // Send start
+    while(!(UCRXIFG0 & UCB0IFG));
+    read_value = UCB0RXBUF;
+    while(!(UCRXIFG0 & UCB0IFG));
+    UCB0CTLW0 |= UCTXNACK;          // Send NACK
+    UCB0CTLW0 |= UCTXSTP;           // Send stop
+    read_value = UCB0RXBUF + read_value << 8;
+
+
+    // Reset I2C interupts
+    UCB0IE = tmp_interupt;
+    return read_value;
+}
+
+
 
 

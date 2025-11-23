@@ -85,8 +85,8 @@ void main(void) {
   //**********************
   //* LED Driver Setup
   //**********************
-  //P4DIR = IR_LED;    // P4.3 is output for IR LED
-  //set_ir_led(false); // Drive LED off
+  P4DIR = IR_LED;    // P4.3 is output for IR LED
+  set_ir_led(false); // Drive LED off
 
   //**********************
   //* ADC Setup
@@ -132,11 +132,21 @@ void main(void) {
 
   verify_VL53L4CX();
 
+  VL53L4CX_tx_data(0x0002, 0x4000);
+
 
   while (1) {
     // TODO convert speed and steering values to PWM values
     // TODO apply PWM values to motors
     //read_ir();
+    
+    int tmp = VL53L4CX_get_dist_block();
+    
+    if (tmp == 0) {
+      set_ir_led(false); // Drive LED off
+    } else {
+      set_ir_led(true);
+    }
   }
 }
 
