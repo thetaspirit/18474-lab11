@@ -67,10 +67,10 @@ void set_right_motor(
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
 // Low-pass filtering the ultrasonic sensor
-#define US_FILTER_POWER 2
+#define US_FILTER_POWER 3
 #define US_FILTER_SIZE (1 << US_FILTER_POWER)
 volatile unsigned int ultrasonic_filter[US_FILTER_SIZE];
-volatile unsigned int us_filter_sum;
+volatile unsigned long us_filter_sum;
 volatile unsigned char us_filter_idx;
 
 volatile unsigned int ir_near_on;  // ADC register value when the IR LED is on,
@@ -90,7 +90,7 @@ volatile int
 volatile int steer; // a value from -100 (left) to 100 (right) determining the
                     // steering intensity
 
-#define PID_LOOP_MS 125 // the period of the PID control loop.
+#define PID_LOOP_MS 62.5f // the period of the PID control loop.
 // period is based off of the configuration of Timer A 3
 typedef struct {
   float k_p;            // Proportional gain
@@ -101,14 +101,14 @@ typedef struct {
   int setpoint;         // target value
 } pid_controller_t;
 
-pid_controller_t ir_pid = {.k_p = 1.0f,
+pid_controller_t ir_pid = {.k_p = 0.01f,
                            .k_i = 0.0f,
-                           .k_d = 0.0f,
+                           .k_d = 0.001f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 2373 - 7};
+                           .setpoint = 2184};
 
-pid_controller_t us_pid = {.k_p = -100.0f / 1400.0f,
+pid_controller_t us_pid = {.k_p = -100.0f / 4000.0f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
@@ -160,7 +160,7 @@ void main(void) {
   //* This is basically the main loop, runs periodically.
   //**********************
   unsigned int clock_scalar = 0b000;
-  unsigned int clock_count = 4096;
+  unsigned int clock_count = 2048;
   TA3EX0 = clock_scalar; // Sets the clock scalar value for Timer_3
   TA3CCR0 = clock_count; // Sets value of Timer_3
   TA3CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_3
@@ -182,7 +182,7 @@ void main(void) {
 
   __enable_interrupt(); // Activate interrupts previously enabled
   while (1) {
-    // read_ir();
+    read_ir();
 
     // Turn LEDs on if we are too close
     if ((us_filter_sum / US_FILTER_SIZE) < us_pid.setpoint) {
@@ -199,8 +199,9 @@ void main(void) {
 
     // TODO convert forward and steer values to left and right PWM values
     // TODO apply PWM values to motors
-    set_left_motor(forward);
-    set_right_motor(forward);
+    // forward = 75;
+    set_left_motor(forward + steer);
+    set_right_motor(forward - steer);
   }
 }
 
@@ -277,15 +278,26 @@ void read_ir(void) {
  */
 #pragma vector = TIMER3_A0_VECTOR
 __interrupt void Timer3_ISR(void) {
-  // read ultrasonic sensor
-  // determine forward speed
-
   // read IR sensor values
   // determine steer
-  unsigned int filtered_ultrasonic_value = us_filter_sum / US_FILTER_SIZE;
+  unsigned int filtered_ultrasonic_value =
+      ultrasonic_filter[(us_filter_idx - 1) % US_FILTER_SIZE];
+  if (filtered_ultrasonic_value > 0x7FFF) {
+    // filtered_ultrasonic_value should never be negative, as a signed OR
+    // unsigned int
+    filtered_ultrasonic_value = 0x7FFF;
+  }
+  // = us_filter_sum >> US_FILTER_POWER;
 
   int us_error = us_pid.setpoint - filtered_ultrasonic_value;
-  float us_output = us_pid.k_p * (float)us_error;
+
+  float us_p = us_pid.k_p * (float)us_error;
+  float us_d =
+      us_pid.k_d * (filtered_ultrasonic_value - us_pid.prev_measurement);
+
+  float us_output = us_p + us_d;
+  us_pid.prev_measurement = filtered_ultrasonic_value;
+
   if (us_output > 100) {
     us_output = 100;
   }
@@ -293,6 +305,27 @@ __interrupt void Timer3_ISR(void) {
     us_output = -100;
   }
   forward = us_output;
+
+  // read ultrasonic sensor
+  // determine forward speed
+  float ir_value = (float)ir_far_on - (float)ir_far_off;
+  int ir_error = ir_pid.setpoint - ir_value;
+
+  float ir_p = ir_pid.k_p * (float)ir_error;
+
+  float ir_d = ir_pid.k_d * (ir_value - ir_pid.prev_measurement);
+
+  float ir_output = ir_p + ir_d;
+
+  if (ir_output > 100) {
+    ir_output = 100;
+  }
+  if (ir_output < -100) {
+    ir_output = -100;
+  }
+  steer = ir_output;
+  ir_pid.prev_measurement = ir_value;
+
   P9OUT ^= PID_INDICATOR;
 }
 
@@ -301,15 +334,17 @@ void ULTRASONIC_SETUP(void) {
   //* Ultrasonic Sensor
   //* Trigger Output Setup
   //* Timer A 0 controls the trigger input to the ultrasonic sensor.
-  //* Runs at 1 MHz in up mode, output mode 7.
-  //* Sends a (at least) 10 us pulse every 60 ms (60,000 us).
+  //* Runs in up mode, output mode 7.
+  //* Sends a pulse that is (at least) 10 us wide.
+  //* Sends a pulse (at most) every 60 us, possibly longer.
   //* Outputs these pulses on P1.6.
   //******************************************************************
-  TA0CCR0 = 60000;  // PWM period period is 60,000 us.
-  TA0CCR1 = 200;    // PWM duty cycle is on for at least 10 us.
+  TA0CCR0 = 0xFFFF; // PWM period period, in units of scaled ACLK clock ticks.
+  TA0CCR1 = 100;    // Duration for which output is HI, in units of scaled ACLK
+                    // clock ticks.
   TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
-  TA0CTL = SMCLK | UP;   // Set SMCLK, UP MODE
+  TA0CTL = SMCLK | UP;   // Set ACLK, UP MODE
   TA0CTL |= TIMER_CLEAR; // Timer starts at 0
 
   // GPIO Output
