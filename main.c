@@ -5,6 +5,8 @@
 #include "myLcd.h"     // Required for the LCD
 #include <driverlib.h> // Required for the LCD
 
+//#include "VL53L4CX.c"
+
 #define RED_LED 0x0001       // P1.0 is the red LED
 #define GREEN_LED 0x0080     // P9.7 is the green LED
 #define STOP_WATCHDOG 0x5A80 // Stop the watchdog timer
@@ -83,49 +85,58 @@ void main(void) {
   //**********************
   //* LED Driver Setup
   //**********************
-  P4DIR = IR_LED;    // P4.3 is output for IR LED
-  set_ir_led(false); // Drive LED off
+  //P4DIR = IR_LED;    // P4.3 is output for IR LED
+  //set_ir_led(false); // Drive LED off
 
   //**********************
   //* ADC Setup
   //* Controlls the IR LED and photodiode
   // ADC interrupt
   //**********************
-  ADC_SETUP();
-  ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
+  //ADC_SETUP();
+  //ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
 
   //**********************
   //* Clock Configuration
   //**********************
-  SwitchToLFXT();
+  //SwitchToLFXT();
   SMCLK_SetTo1MHz();
 
   //**********************
   //* Ultrasonic Sensor Setup
   //**********************
-  ULTRASONIC_SETUP();
+  //ULTRASONIC_SETUP();
 
   //**********************
   //* Motor Setup
   //**********************
-  MOTOR_SETUP();
+  //MOTOR_SETUP();
 
   //**********************
   //* Timer A 3 Setup
   //* This is basically the main loop, runs periodically.
   //**********************
+/*
   unsigned int clock_scalar = 0b111; // eigth scalar
   unsigned int clock_count = 4096;
   TA3EX0 = clock_scalar; // Sets the clock scalar value for Timer_3
   TA3CCR0 = clock_count; // Sets value of Timer_3
   TA3CTL = ACLK | UP;    // Set ACLK, UP MODE for Timer_3
   TA3CCTL0 = CCIE;       // Enable interrupt for Timer_3
+*/
 
-  __enable_interrupt(); // Activate interrupts previously enabled
-  read_ir();
+  VL53L4CX_setup();
+
+
+  //__enable_interrupt(); // Activate interrupts previously enabled
+
+  verify_VL53L4CX();
+
+
   while (1) {
     // TODO convert speed and steering values to PWM values
     // TODO apply PWM values to motors
+    //read_ir();
   }
 }
 
