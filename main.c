@@ -280,14 +280,7 @@ void read_ir(void) {
 __interrupt void Timer3_ISR(void) {
   // read IR sensor values
   // determine steer
-  unsigned int filtered_ultrasonic_value =
-      ultrasonic_filter[(us_filter_idx - 1) % US_FILTER_SIZE];
-  if (filtered_ultrasonic_value > 0x7FFF) {
-    // filtered_ultrasonic_value should never be negative, as a signed OR
-    // unsigned int
-    filtered_ultrasonic_value = 0x7FFF;
-  }
-  // = us_filter_sum >> US_FILTER_POWER;
+  unsigned int filtered_ultrasonic_value = us_filter_sum >> US_FILTER_POWER;
 
   int us_error = us_pid.setpoint - filtered_ultrasonic_value;
 
@@ -339,12 +332,12 @@ void ULTRASONIC_SETUP(void) {
   //* Sends a pulse (at most) every 60 us, possibly longer.
   //* Outputs these pulses on P1.6.
   //******************************************************************
-  TA0CCR0 = 0xFFFF; // PWM period period, in units of scaled ACLK clock ticks.
-  TA0CCR1 = 100;    // Duration for which output is HI, in units of scaled ACLK
+  TA0CCR0 = 3279;   // PWM period period, in units of scaled ACLK clock ticks.
+  TA0CCR1 = 1;      // Duration for which output is HI, in units of scaled ACLK
                     // clock ticks.
   TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
-  TA0CTL = SMCLK | UP;   // Set ACLK, UP MODE
+  TA0CTL = ACLK | UP;    // Set ACLK, UP MODE
   TA0CTL |= TIMER_CLEAR; // Timer starts at 0
 
   // GPIO Output
