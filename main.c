@@ -41,13 +41,13 @@
 #define IR_FAR_SETPOINT  // the PID setpoint for the value of the far-range IR
                          // photodiode reading
 
-#define ML_EN1 BIT6 // P2.6
-#define ML_EN2 BIT7 // P2.7
-#define ML_PWM BIT3 // P3.3
+#define MR_EN1 BIT6 // P2.6
+#define MR_EN2 BIT7 // P2.7
+#define MR_PWM BIT3 // P3.3
 
-#define MR_EN1 BIT4 // P2.4
-#define MR_EN2 BIT5 // P2.5
-#define MR_PWM BIT7 // P4.7
+#define ML_EN1 BIT4 // P2.4
+#define ML_EN2 BIT5 // P2.5
+#define ML_PWM BIT7 // P4.7
 
 void ADC_SETUP(void);       // Used to setup ADC12 peripheral
 void SwitchToLFXT(void);    // Switches ACLK to Low Frequency eXTernal crystal
@@ -67,7 +67,7 @@ void set_right_motor(
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
 // Low-pass filtering the ultrasonic sensor
-#define US_FILTER_POWER 3
+#define US_FILTER_POWER 2
 #define US_FILTER_SIZE (1 << US_FILTER_POWER)
 volatile unsigned int ultrasonic_filter[US_FILTER_SIZE];
 volatile unsigned long us_filter_sum;
@@ -93,20 +93,20 @@ volatile int steer; // a value from -100 (left) to 100 (right) determining the
 #define PID_LOOP_MS 62.5f // the period of the PID control loop.
 // period is based off of the configuration of Timer A 3
 typedef struct {
-  float k_p;            // Proportional gain
-  float k_i;            // Integral gain
-  float k_d;            // Derivative gain
-  int prev_measurement; // Previous process variable measurement
-  int integral;         // sum of the previous error values
-  int setpoint;         // target value
+  float k_p;              // Proportional gain
+  float k_i;              // Integral gain
+  float k_d;              // Derivative gain
+  float prev_measurement; // Previous process variable measurement
+  float integral;         // sum of the previous error values
+  float setpoint;         // target value
 } pid_controller_t;
 
-pid_controller_t ir_pid = {.k_p = 0.01f,
+pid_controller_t ir_pid = {.k_p = 120000.0f,
                            .k_i = 0.0f,
-                           .k_d = 0.001f,
+                           .k_d = 0.00f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 2184};
+                           .setpoint = 0.0005f};
 
 pid_controller_t us_pid = {.k_p = -100.0f / 4000.0f,
                            .k_i = 0.0f,
@@ -196,17 +196,14 @@ void main(void) {
       P4OUT &= ~(US_INDICATOR);
     }
 
-    if (ir_far_on - ir_far_off > ir_pid.setpoint) {
+    if (ir_far_on - ir_far_off > 1.0f / ir_pid.setpoint) {
       P4OUT |= IR_INDICATOR;
     } else {
       P4OUT &= ~(IR_INDICATOR);
     }
 
-    // TODO convert forward and steer values to left and right PWM values
-    // TODO apply PWM values to motors
-    // forward = 75;
-    set_left_motor(forward + steer);
-    set_right_motor(forward - steer);
+    set_left_motor(forward - steer);
+    set_right_motor(forward + steer);
   }
 }
 
@@ -290,9 +287,9 @@ __interrupt void Timer3_ISR(void) {
     filtered_ultrasonic_value = 0x7FFF;
   }
 
-  int us_error = us_pid.setpoint - filtered_ultrasonic_value;
+  float us_error = us_pid.setpoint - filtered_ultrasonic_value;
 
-  float us_p = us_pid.k_p * (float)us_error;
+  float us_p = us_pid.k_p * us_error;
   float us_d =
       us_pid.k_d * (filtered_ultrasonic_value - us_pid.prev_measurement);
 
@@ -310,9 +307,10 @@ __interrupt void Timer3_ISR(void) {
   // read ultrasonic sensor
   // determine forward speed
   float ir_value = (float)ir_far_on - (float)ir_far_off;
-  int ir_error = ir_pid.setpoint - ir_value;
+  ir_value = 1 / ir_value;
+  float ir_error = ir_pid.setpoint - ir_value;
 
-  float ir_p = ir_pid.k_p * (float)ir_error;
+  float ir_p = ir_pid.k_p * ir_error;
 
   float ir_d = ir_pid.k_d * (ir_value - ir_pid.prev_measurement);
 
@@ -403,13 +401,13 @@ void MOTOR_SETUP(void) {
   TA1CTL &= ~(TIMER_OFF); // Timer starts as off
   TA1CTL |= MC__UP;       // Turn on timer to enable PWM output
 
-  // Tie P3.3 to PWM output
-  P3SEL1 |= BIT3;  // Set bit P3SEL1.3, but not bit P3SEL0.3
-  P3DIR |= ML_PWM; // P3.3 is an output
-
   // Tie P4.7 to PWM output
-  P4SELC |= BIT7;  // Set bits P4SEL1.7 and P4SEL0.7 simultaneously
-  P4DIR |= MR_PWM; // P4.7 is an output
+  P4SELC |= BIT7;
+  P4DIR |= ML_PWM;
+
+  // Tie P3.3 to PWM output
+  P3SEL1 |= BIT3;
+  P3DIR |= MR_PWM;
 
   //**********************
   //* Left and Right Motor Input Pin Setup
