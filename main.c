@@ -147,6 +147,11 @@ void main(void) {
   //* Ultrasonic Sensor Setup
   //**********************
   ULTRASONIC_SETUP();
+  int i = 0;
+  while (i < US_FILTER_SIZE) {
+    ultrasonic_filter[i] = 0;
+    i++;
+  }
   us_filter_sum = 0;
   us_filter_idx = 0;
 
@@ -281,6 +286,9 @@ __interrupt void Timer3_ISR(void) {
   // read IR sensor values
   // determine steer
   unsigned int filtered_ultrasonic_value = us_filter_sum >> US_FILTER_POWER;
+  if (filtered_ultrasonic_value > 0x7FFF) {
+    filtered_ultrasonic_value = 0x7FFF;
+  }
 
   int us_error = us_pid.setpoint - filtered_ultrasonic_value;
 
