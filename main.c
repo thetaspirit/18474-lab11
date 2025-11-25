@@ -101,19 +101,19 @@ typedef struct {
   float setpoint;         // target value
 } pid_controller_t;
 
-pid_controller_t ir_pid = {.k_p = 120000.0f,
+pid_controller_t ir_pid = {.k_p = 400000.0f,
                            .k_i = 0.0f,
-                           .k_d = 0.00f,
+                           .k_d = 0.1f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 0.0005f};
+                           .setpoint = 0.000455166126f};
 
-pid_controller_t us_pid = {.k_p = -100.0f / 4000.0f,
+pid_controller_t us_pid = {.k_p = -90.0f / 4000.0f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 580};
+                           .setpoint = 696};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -196,7 +196,10 @@ void main(void) {
       P4OUT &= ~(US_INDICATOR);
     }
 
-    if (ir_far_on - ir_far_off > 1.0f / ir_pid.setpoint) {
+    float ir_value = (float)ir_far_on - (float)ir_far_off;
+    ir_value = 1 / ir_value;
+
+    if (ir_value < ir_pid.setpoint) {
       P4OUT |= IR_INDICATOR;
     } else {
       P4OUT &= ~(IR_INDICATOR);
