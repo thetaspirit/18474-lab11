@@ -1,7 +1,8 @@
 #include <msp430.h>
 
 
-#define VL53L4CXADDR 0x29         // address of sensor is 52hex
+#define VL53L4CXADDR 0x51
+//0x29         // 7 bit address of sensor is 0x29
 
 
 
@@ -19,6 +20,7 @@ int VL53L4CX_setup() {
 
 
     UCB0CTLW0 &= ~UCSWRST;               // eUSCI_B in operational state
+    UCB0IFG = 0;
     UCB0IFG = 0;
     //UCB0IE |= UCTXIE;                   // enable TX-interrupt
     return 0;
@@ -41,19 +43,18 @@ int verify_VL53L4CX() {
     UCB0CTLW0 |= UCTR | UCTXSTT;    // Set transmit and send start
 
     while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg >> 8;           // Put data in tx buf
+    UCB0TXBUF = (reg >> 8) & 0xFF;  // Put data in tx buf
     while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg;                // Put data in tx buf
+    UCB0TXBUF = reg & 0xFF;         // Put data in tx buf
     while (!(UCTXIFG0 & UCB0IFG));  // Wait for transmission
 
 
     UCB0CTLW0 &= ~UCTR;             // Set to recieve mode
     UCB0CTLW0 |= UCTXSTT;           // Send start
-    while(!(UCRXIFG0 & UCB0IFG));
-    read_value = UCB0RXBUF;
-    while(!(UCRXIFG0 & UCB0IFG));
-    UCB0CTLW0 |= UCTXNACK;          // Send NACK
+    while(!(UCRXIFG0 & UCB0IFG));   // Put data in tx buf
     UCB0CTLW0 |= UCTXSTP;           // Send stop
+    read_value = UCB0RXBUF << 8;
+    while(!(UCRXIFG0 & UCB0IFG));   // Put data in tx buf
     read_value = UCB0RXBUF;
 
 
@@ -80,24 +81,20 @@ unsigned int VL53L4CX_tx_data(unsigned int reg, unsigned int data) {
     UCB0CTLW0 |= UCTR | UCTXSTT;    // Set transmit and send start
 
     while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg >> 8;           // Put data in tx buf
+    UCB0TXBUF = (reg >> 8) & 0xFF;  // Put data in tx buf
     while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg;                // Put data in tx buf
+    UCB0TXBUF = reg & 0xFF;         // Put data in tx buf
     while (!(UCTXIFG0 & UCB0IFG));  // Wait for transmission
 
-    UCB0CTLW0 |= UCTXSTP;
-    UCB0TXBUF = data;                // Put data in tx buf
+    
 
-/*
-    UCB0CTLW0 &= ~UCTR;             // Set to recieve mode
-    UCB0CTLW0 |= UCTXSTT;           // Send start
-    while(!(UCRXIFG0 & UCB0IFG));
-    read_value = UCB0RXBUF;
-    while(!(UCRXIFG0 & UCB0IFG));
-    UCB0CTLW0 |= UCTXNACK;          // Send NACK
+//    UCB0CTLW0 |= UCTR;              // Set to Transmit mode
+//    UCB0CTLW0 |= UCTXSTT;           // Send start
+//    while(!(UCRXIFG0 & UCB0IFG));
+    UCB0TXBUF = data;               // Put data in tx buf
+    while(!(UCTXIFG0 & UCB0IFG));
     UCB0CTLW0 |= UCTXSTP;           // Send stop
-    read_value = UCB0RXBUF;
-*/
+
 
 
     // Reset I2C interupts
@@ -114,8 +111,8 @@ unsigned int VL53L4CX_get_dist_block() {
     int tmp_interupt = UCB0IE;
     UCB0IE = 0;
 
-    //
-    int reg = 0x0096;              // Read register
+//    int reg = 0x0088;              // Read register
+    int reg = 0x0008;
 
     int read_value = 0;
 
@@ -124,20 +121,23 @@ unsigned int VL53L4CX_get_dist_block() {
 
     UCB0CTLW0 |= UCTR | UCTXSTT;    // Set transmit and send start
 
+//    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
+//    UCB0TXBUF = (reg >> 8) & 0xFF;  // Put data in tx buf
     while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg >> 8;           // Put data in tx buf
-    while (!(UCB0IFG & UCTXIFG));   // Wait for tx buf ready
-    UCB0TXBUF = reg;                // Put data in tx buf
+    UCB0TXBUF = reg & 0xFF;         // Put data in tx buf
     while (!(UCTXIFG0 & UCB0IFG));  // Wait for transmission
+
 
     UCB0CTLW0 &= ~UCTR;             // Set to recieve mode
     UCB0CTLW0 |= UCTXSTT;           // Send start
-    while(!(UCRXIFG0 & UCB0IFG));
-    read_value = UCB0RXBUF;
-    while(!(UCRXIFG0 & UCB0IFG));
-    UCB0CTLW0 |= UCTXNACK;          // Send NACK
+    while(!(UCRXIFG0 & UCB0IFG));   // Put data in tx buf
     UCB0CTLW0 |= UCTXSTP;           // Send stop
-    read_value = UCB0RXBUF + read_value << 8;
+    read_value = UCB0RXBUF;
+    while(!(UCRXIFG0 & UCB0IFG));   // Put data in tx buf
+    read_value = UCB0RXBUF << 8;
+
+
+
 
 
     // Reset I2C interupts
