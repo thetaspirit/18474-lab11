@@ -183,11 +183,15 @@ void main(void) {
   i2c_params.selectClockSource = EUSCI_B_I2C_CLOCKSOURCE_SMCLK;
   i2c_params.i2cClk = 1000000;
   i2c_params.dataRate = EUSCI_B_I2C_SET_DATA_RATE_100KBPS;
-  i2c_params.byteCounterThreshold = 4;
+  i2c_params.byteCounterThreshold = 2;
   i2c_params.autoSTOPGeneration = EUSCI_B_I2C_NO_AUTO_STOP;
   EUSCI_B_I2C_initMaster(eUSCI_B1_BASE_ADDR, &i2c_params);
   EUSCI_B_I2C_setSlaveAddress(eUSCI_B1_BASE_ADDR, PROX_SENSOR_ADDR);
   EUSCI_B_I2C_enable(eUSCI_B1_BASE_ADDR);
+
+  EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, 0x03);
+  EUSCI_B_I2C_masterSendMultiByteNext(eUSCI_B1_BASE_ADDR, 0x08);
+  EUSCI_B_I2C_masterSendMultiByteFinish(eUSCI_B1_BASE_ADDR, 0x00);
 
   while (1) {
     EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
@@ -195,17 +199,17 @@ void main(void) {
     // First, send a Start condition, transmit the sensor's address plus a Write
     // bit. Then, send the command code to read from the proximity sensor.
     EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
+    
     // Then, send another Start condition, the sensor's address, and a Read bit.
     EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
-    // Do not send a Stop condition.
-
     // Receive the least significant bits.
     uint8_t prox_lsb = EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
 
     // Receive the most significant bits of the proximity value, then send a
     // Stop condition.
+    EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
     uint8_t prox_msb =
-        EUSCI_B_I2C_masterReceiveMultiByteFinish(eUSCI_B1_BASE_ADDR);
+        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
 
     proximity = (prox_msb << 8) | prox_lsb;
   }
