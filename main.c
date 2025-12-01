@@ -49,6 +49,13 @@
 #define ML_EN2 BIT5 // P2.5
 #define ML_PWM BIT7 // P4.7
 
+#define eUSCI_B1_BASE_ADDR 0x0680 // base address of the eUSCI_B0 peripheral
+#define PROX_SENSOR_ADDR 0x51     // the i2c address of the IR proximity sensor
+#define PS_DATA_COMMAND                                                        \
+  0x08 // the command code to read from the IR proximity sensor's data registers
+
+volatile uint16_t proximity;
+
 void ADC_SETUP(void);       // Used to setup ADC12 peripheral
 void SwitchToLFXT(void);    // Switches ACLK to Low Frequency eXTernal crystal
                             // (LFXT) at 32.768kHz
@@ -126,16 +133,16 @@ void main(void) {
   //**********************
   //* LED Driver Setup
   //**********************
-  P4DIR = IR_LED;    // P4.3 is output for IR LED
-  set_ir_led(false); // Drive LED off
+  // P4DIR = IR_LED;    // P4.3 is output for IR LED
+  // set_ir_led(false); // Drive LED off
 
   //**********************
   //* ADC Setup
   //* Controlls the IR LED and photodiode
   // ADC interrupt
   //**********************
-  ADC_SETUP();
-  ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
+  // ADC_SETUP();
+  // ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
 
   //**********************
   //* Clock Configuration
@@ -146,19 +153,62 @@ void main(void) {
   //**********************
   //* Ultrasonic Sensor Setup
   //**********************
-  ULTRASONIC_SETUP();
-  int i = 0;
-  while (i < US_FILTER_SIZE) {
-    ultrasonic_filter[i] = 0;
-    i++;
-  }
-  us_filter_sum = 0;
-  us_filter_idx = 0;
+  // ULTRASONIC_SETUP();
+  // int i = 0;
+  // while (i < US_FILTER_SIZE) {
+  //   ultrasonic_filter[i] = 0;
+  //   i++;
+  // }
+  // us_filter_sum = 0;
+  // us_filter_idx = 0;
 
   //**********************
   //* Motor Setup
   //**********************
-  MOTOR_SETUP();
+  // MOTOR_SETUP();
+
+  //**********************
+  //* Proximity Setup
+  //* P3.1 = SDA
+  //* P3.2 = SCL
+  //**********************
+  // Configuring GPIO pins to be SDA and SCL pins
+  P3SEL0 |= BIT1;
+  P3SEL0 |= BIT2;
+
+  // Configure internal pull-up resistors
+  P3REN |= BIT1 | BIT2;
+
+  EUSCI_B_I2C_initMasterParam i2c_params;
+  i2c_params.selectClockSource = EUSCI_B_I2C_CLOCKSOURCE_SMCLK;
+  i2c_params.i2cClk = 1000000;
+  i2c_params.dataRate = EUSCI_B_I2C_SET_DATA_RATE_100KBPS;
+  i2c_params.byteCounterThreshold = 4;
+  i2c_params.autoSTOPGeneration = EUSCI_B_I2C_NO_AUTO_STOP;
+  EUSCI_B_I2C_initMaster(eUSCI_B1_BASE_ADDR, &i2c_params);
+  EUSCI_B_I2C_setSlaveAddress(eUSCI_B1_BASE_ADDR, PROX_SENSOR_ADDR);
+  EUSCI_B_I2C_enable(eUSCI_B1_BASE_ADDR);
+
+  while (1) {
+    EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
+
+    // First, send a Start condition, transmit the sensor's address plus a Write
+    // bit. Then, send the command code to read from the proximity sensor.
+    EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
+    // Then, send another Start condition, the sensor's address, and a Read bit.
+    EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
+    // Do not send a Stop condition.
+
+    // Receive the least significant bits.
+    uint8_t prox_lsb = EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+
+    // Receive the most significant bits of the proximity value, then send a
+    // Stop condition.
+    uint8_t prox_msb =
+        EUSCI_B_I2C_masterReceiveMultiByteFinish(eUSCI_B1_BASE_ADDR);
+
+    proximity = (prox_msb << 8) | prox_lsb;
+  }
 
   //**********************
   //* Timer A 3 Setup
