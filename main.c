@@ -54,7 +54,7 @@
 #define PS_DATA_COMMAND                                                        \
   0x08 // the command code to read from the IR proximity sensor's data registers
 
-volatile uint16_t proximity;
+volatile uint16_t ir_i2c_proximity;
 
 void ADC_SETUP(void);       // Used to setup ADC12 peripheral
 void SwitchToLFXT(void);    // Switches ACLK to Low Frequency eXTernal crystal
@@ -108,19 +108,19 @@ typedef struct {
   float setpoint;         // target value
 } pid_controller_t;
 
-pid_controller_t ir_pid = {.k_p = 400000.0f,
+pid_controller_t side_pid = {.k_p = 400000.0f,
                            .k_i = 0.0f,
                            .k_d = 0.1f,
                            .prev_measurement = 0,
                            .integral = 0,
                            .setpoint = 0.000455166126f};
 
-pid_controller_t us_pid = {.k_p = -90.0f / 4000.0f,
+pid_controller_t forward_pid = {.k_p = 50.0f / 1000.0f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 696};
+                           .setpoint = 1000};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -133,16 +133,16 @@ void main(void) {
   //**********************
   //* LED Driver Setup
   //**********************
-  // P4DIR = IR_LED;    // P4.3 is output for IR LED
-  // set_ir_led(false); // Drive LED off
+  P4DIR = IR_LED;    // P4.3 is output for IR LED
+  set_ir_led(false); // Drive LED off
 
   //**********************
   //* ADC Setup
   //* Controlls the IR LED and photodiode
   // ADC interrupt
   //**********************
-  // ADC_SETUP();
-  // ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
+  ADC_SETUP();
+  ADC12IER0 |= ADC12IE1; // Enable ADC interrupt
 
   //**********************
   //* Clock Configuration
@@ -165,7 +165,7 @@ void main(void) {
   //**********************
   //* Motor Setup
   //**********************
-  // MOTOR_SETUP();
+  MOTOR_SETUP();
 
   //**********************
   //* Proximity Setup
@@ -193,33 +193,6 @@ void main(void) {
   EUSCI_B_I2C_masterSendMultiByteNext(eUSCI_B1_BASE_ADDR, 0x08);
   EUSCI_B_I2C_masterSendMultiByteFinish(eUSCI_B1_BASE_ADDR, 0x00);
 
-  while (1) {
-    EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
-
-    // First, send a Start condition, transmit the sensor's address plus a Write
-    // bit. Then, send the command code to read from the proximity sensor.
-    EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
-
-    // Then, send another Start condition, the sensor's address, and a Read bit.
-    //    EUSCI_B_I2C_clearInterrupt(eUSCI_B1_BASE_ADDR, 0x01);
-    EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
-    // Receive the least significant bits.
-    //    uint8_t prox_lsb =
-    //    EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
-    EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-    uint8_t prox_lsb =
-        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-
-    // Receive the most significant bits of the proximity value, then send a
-    // Stop condition.
-    EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
-    //    uint8_t prox_msb =
-    //        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
-    uint8_t prox_msb =
-        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-
-    proximity = (prox_msb << 8) | prox_lsb;
-  }
 
   //**********************
   //* Timer A 3 Setup
@@ -251,7 +224,7 @@ void main(void) {
     read_ir();
 
     // Turn LEDs on if we are too close
-    if ((us_filter_sum / US_FILTER_SIZE) < us_pid.setpoint) {
+    if (forward < 25) {
       P4OUT |= US_INDICATOR;
     } else {
       P4OUT &= ~(US_INDICATOR);
@@ -260,7 +233,7 @@ void main(void) {
     float ir_value = (float)ir_far_on - (float)ir_far_off;
     ir_value = 1 / ir_value;
 
-    if (ir_value < ir_pid.setpoint) {
+    if (ir_value < side_pid.setpoint) {
       P4OUT |= IR_INDICATOR;
     } else {
       P4OUT &= ~(IR_INDICATOR);
@@ -268,6 +241,33 @@ void main(void) {
 
     set_left_motor(forward - steer);
     set_right_motor(forward + steer);
+
+    // I2C snsor read
+    EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
+
+    // First, send a Start condition, transmit the sensor's address plus a Write
+    // bit. Then, send the command code to read from the proximity sensor.
+    EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
+
+    // Then, send another Start condition, the sensor's address, and a Read bit.
+    //    EUSCI_B_I2C_clearInterrupt(eUSCI_B1_BASE_ADDR, 0x01);
+    EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
+    // Receive the least significant bits.
+    //    uint8_t prox_lsb =
+    //    EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+    EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+    uint8_t prox_lsb =
+        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+
+    // Receive the most significant bits of the proximity value, then send a
+    // Stop condition.
+    EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
+    //    uint8_t prox_msb =
+    //        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+    uint8_t prox_msb =
+        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+
+    ir_i2c_proximity = (prox_msb << 8) | prox_lsb;
   }
 }
 
@@ -344,21 +344,17 @@ void read_ir(void) {
  */
 #pragma vector = TIMER3_A0_VECTOR
 __interrupt void Timer3_ISR(void) {
-  // read IR sensor values
-  // determine steer
-  unsigned int filtered_ultrasonic_value = us_filter_sum >> US_FILTER_POWER;
-  if (filtered_ultrasonic_value > 0x7FFF) {
-    filtered_ultrasonic_value = 0x7FFF;
-  }
+  // read front sensor
+  // determine forward speed
 
-  float us_error = us_pid.setpoint - filtered_ultrasonic_value;
+  float us_error = forward_pid.setpoint - ir_i2c_proximity;
 
-  float us_p = us_pid.k_p * us_error;
+  float us_p = forward_pid.k_p * us_error;
   float us_d =
-      us_pid.k_d * (filtered_ultrasonic_value - us_pid.prev_measurement);
+      forward_pid.k_d * (ir_i2c_proximity - forward_pid.prev_measurement);
 
   float us_output = us_p + us_d;
-  us_pid.prev_measurement = filtered_ultrasonic_value;
+  forward_pid.prev_measurement = ir_i2c_proximity;
 
   if (us_output > 100) {
     us_output = 100;
@@ -368,15 +364,15 @@ __interrupt void Timer3_ISR(void) {
   }
   forward = us_output;
 
-  // read ultrasonic sensor
-  // determine forward speed
+  // read side sensor
+  // determine steer
   float ir_value = (float)ir_far_on - (float)ir_far_off;
   ir_value = 1 / ir_value;
-  float ir_error = ir_pid.setpoint - ir_value;
+  float ir_error = side_pid.setpoint - ir_value;
 
-  float ir_p = ir_pid.k_p * ir_error;
+  float ir_p = side_pid.k_p * ir_error;
 
-  float ir_d = ir_pid.k_d * (ir_value - ir_pid.prev_measurement);
+  float ir_d = side_pid.k_d * (ir_value - side_pid.prev_measurement);
 
   float ir_output = ir_p + ir_d;
 
@@ -387,7 +383,7 @@ __interrupt void Timer3_ISR(void) {
     ir_output = -100;
   }
   steer = ir_output;
-  ir_pid.prev_measurement = ir_value;
+  side_pid.prev_measurement = ir_value;
 
   P9OUT ^= PID_INDICATOR;
 }
