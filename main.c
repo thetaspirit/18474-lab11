@@ -199,17 +199,24 @@ void main(void) {
     // First, send a Start condition, transmit the sensor's address plus a Write
     // bit. Then, send the command code to read from the proximity sensor.
     EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
-    
+
     // Then, send another Start condition, the sensor's address, and a Read bit.
+    //    EUSCI_B_I2C_clearInterrupt(eUSCI_B1_BASE_ADDR, 0x01);
     EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
     // Receive the least significant bits.
-    uint8_t prox_lsb = EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+    //    uint8_t prox_lsb =
+    //    EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+    EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+    uint8_t prox_lsb =
+        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
 
     // Receive the most significant bits of the proximity value, then send a
     // Stop condition.
     EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
+    //    uint8_t prox_msb =
+    //        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
     uint8_t prox_msb =
-        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
 
     proximity = (prox_msb << 8) | prox_lsb;
   }
