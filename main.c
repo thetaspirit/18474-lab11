@@ -115,12 +115,12 @@ pid_controller_t side_pid = {.k_p = 400000.0f,
                            .integral = 0,
                            .setpoint = 0.000455166126f};
 
-pid_controller_t forward_pid = {.k_p = 50.0f / 1000.0f,
+pid_controller_t forward_pid = {.k_p = -2.50f,
                            .k_i = 0.0f,
                            .k_d = 0.0f,
                            .prev_measurement = 0,
                            .integral = 0,
-                           .setpoint = 1000};
+                           .setpoint = 1000.0f/450.0f};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -224,7 +224,7 @@ void main(void) {
     read_ir();
 
     // Turn LEDs on if we are too close
-    if (forward < 25) {
+    if (forward < 1) {
       P4OUT |= US_INDICATOR;
     } else {
       P4OUT &= ~(US_INDICATOR);
@@ -346,15 +346,16 @@ void read_ir(void) {
 __interrupt void Timer3_ISR(void) {
   // read front sensor
   // determine forward speed
+  float front_proximity_value = 1000.0f / (float)ir_i2c_proximity;
 
-  float us_error = forward_pid.setpoint - ir_i2c_proximity;
+  float us_error = forward_pid.setpoint - front_proximity_value;
 
   float us_p = forward_pid.k_p * us_error;
   float us_d =
-      forward_pid.k_d * (ir_i2c_proximity - forward_pid.prev_measurement);
+      forward_pid.k_d * (front_proximity_value - forward_pid.prev_measurement);
 
   float us_output = us_p + us_d;
-  forward_pid.prev_measurement = ir_i2c_proximity;
+  forward_pid.prev_measurement = front_proximity_value;
 
   if (us_output > 100) {
     us_output = 100;
