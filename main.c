@@ -109,18 +109,18 @@ typedef struct {
 } pid_controller_t;
 
 pid_controller_t side_pid = {.k_p = 400000.0f,
-                           .k_i = 0.0f,
-                           .k_d = 0.1f,
-                           .prev_measurement = 0,
-                           .integral = 0,
-                           .setpoint = 0.000455166126f};
+                             .k_i = 0.0f,
+                             .k_d = -10000.0f,
+                             .prev_measurement = 0,
+                             .integral = 0,
+                             .setpoint = 0.000455166126f};
 
 pid_controller_t forward_pid = {.k_p = -2.50f,
-                           .k_i = 0.0f,
-                           .k_d = 0.0f,
-                           .prev_measurement = 0,
-                           .integral = 0,
-                           .setpoint = 1000.0f/450.0f};
+                                .k_i = 0.0f,
+                                .k_d = 0.0f,
+                                .prev_measurement = 0,
+                                .integral = 0,
+                                .setpoint = 1000.0f / 470.0f};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -192,7 +192,6 @@ void main(void) {
   EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, 0x03);
   EUSCI_B_I2C_masterSendMultiByteNext(eUSCI_B1_BASE_ADDR, 0x08);
   EUSCI_B_I2C_masterSendMultiByteFinish(eUSCI_B1_BASE_ADDR, 0x00);
-
 
   //**********************
   //* Timer A 3 Setup
