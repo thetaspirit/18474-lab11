@@ -120,7 +120,7 @@ pid_controller_t forward_pid = {.k_p = -3.0f,
                                 .k_d = 0.0f,
                                 .prev_measurement = 0,
                                 .integral = 0,
-                                .setpoint = 1000.0f / 440.0f};
+                                .setpoint = 1000.0f / 400.0f};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -391,7 +391,7 @@ __interrupt void Timer3_ISR(void) {
   // turning left at a corner
   // if there is a wall or obstacle close enough ahead,
   // start to steer left.  closer object = more significant steer
-  int added_steer = ir_i2c_proximity / 4;
+  int added_steer = ir_i2c_proximity / 2;
 
   if (added_steer > 15) {
     steer = added_steer;
