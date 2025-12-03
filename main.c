@@ -113,14 +113,14 @@ pid_controller_t side_pid = {.k_p = 400000.0f,
                              .k_d = -10000.0f,
                              .prev_measurement = 0,
                              .integral = 0,
-                             .setpoint = 0.000455166126f};
+                             .setpoint = 0.0005f};
 
-pid_controller_t forward_pid = {.k_p = -2.50f,
+pid_controller_t forward_pid = {.k_p = -3.0f,
                                 .k_i = 0.0f,
                                 .k_d = 0.0f,
                                 .prev_measurement = 0,
                                 .integral = 0,
-                                .setpoint = 1000.0f / 470.0f};
+                                .setpoint = 1000.0f / 440.0f};
 
 void main(void) {
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
@@ -343,8 +343,11 @@ void read_ir(void) {
  */
 #pragma vector = TIMER3_A0_VECTOR
 __interrupt void Timer3_ISR(void) {
-  // read front sensor
-  // determine forward speed
+  //************************************************************************
+  //* Read front sensor, determine forward speed
+  //************************************************************************
+
+  // linearize reading from proximity sensor
   float front_proximity_value = 1000.0f / (float)ir_i2c_proximity;
 
   float us_error = forward_pid.setpoint - front_proximity_value;
@@ -384,6 +387,22 @@ __interrupt void Timer3_ISR(void) {
   }
   steer = ir_output;
   side_pid.prev_measurement = ir_value;
+
+  // turning left at a corner
+  // if there is a wall or obstacle close enough ahead,
+  // start to steer left.  closer object = more significant steer
+  int added_steer = ir_i2c_proximity / 4;
+
+  if (added_steer > 15) {
+    steer = added_steer;
+  }
+
+  if (steer > 100) {
+    steer = 100;
+  }
+  if (steer < -100) {
+    steer = -100;
+  }
 
   P9OUT ^= PID_INDICATOR;
 }
