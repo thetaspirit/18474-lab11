@@ -108,12 +108,12 @@ typedef struct {
   float setpoint;         // target value
 } pid_controller_t;
 
-pid_controller_t side_pid = {.k_p = 400000.0f,
+pid_controller_t side_pid = {.k_p = 0.60f,
                              .k_i = 0.0f,
-                             .k_d = -10000.0f,
+                             .k_d = -0.010f,
                              .prev_measurement = 0,
                              .integral = 0,
-                             .setpoint = 0.0005f};
+                             .setpoint = 0.00025f};
 
 pid_controller_t forward_pid = {.k_p = -3.0f,
                                 .k_i = 0.0f,
@@ -230,7 +230,7 @@ void main(void) {
     }
 
     float ir_value = (float)ir_far_on - (float)ir_far_off;
-    ir_value = 1 / ir_value;
+    ir_value = 1000 / (ir_value * ir_value);
 
     if (ir_value < side_pid.setpoint) {
       P4OUT |= IR_INDICATOR;
@@ -370,7 +370,7 @@ __interrupt void Timer3_ISR(void) {
   // read side sensor
   // determine steer
   float ir_value = (float)ir_far_on - (float)ir_far_off;
-  ir_value = 1 / ir_value;
+  ir_value = 1000 / (ir_value * ir_value);
   float ir_error = side_pid.setpoint - ir_value;
 
   float ir_p = side_pid.k_p * ir_error;
