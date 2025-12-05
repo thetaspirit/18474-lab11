@@ -20,6 +20,9 @@
 
 #define IR_INDICATOR BIT0 // P4.0 is used as an LED indicator for IR sensor
 
+#define DOOR_INDICATOR                                                         \
+  BIT0 // P2.0 is used as an LED indicator for the door detector
+
 #define ADC12_SHT_16 0x0200      // 16 clock cycles for sample and hold
 #define ADC12_SHT_128 0x0600     // 128 clock cycles for sample and hold
 #define ADC12_SHT_512 0x0A00     // 128 clock cycles for sample and hold
@@ -96,6 +99,8 @@ volatile int
     forward; // a value from -100 to 100, determing the overall forward speed
 volatile int steer; // a value from -100 (left) to 100 (right) determining the
                     // steering intensity
+
+volatile bool door_detected;
 
 #define PID_LOOP_MS 62.5f // the period of the PID control loop.
 // period is based off of the configuration of Timer A 3
@@ -208,7 +213,6 @@ void main(void) {
   steer = 0;
 
   // DEBUG LEDS
-
   P9DIR |= PID_INDICATOR;
   P9OUT &= ~(PID_INDICATOR);
 
@@ -217,6 +221,10 @@ void main(void) {
 
   P4DIR |= IR_INDICATOR;
   P4OUT &= ~(IR_INDICATOR);
+
+  P2DIR |= DOOR_INDICATOR;
+  P2OUT &= ~(DOOR_INDICATOR);
+  door_detected = false;
 
   __enable_interrupt(); // Activate interrupts previously enabled
   while (1) {
@@ -227,6 +235,12 @@ void main(void) {
       P4OUT |= US_INDICATOR;
     } else {
       P4OUT &= ~(US_INDICATOR);
+    }
+
+    if (door_detected) {
+      P2OUT |= DOOR_INDICATOR;
+    } else {
+      P2OUT &= ~(DOOR_INDICATOR);
     }
 
     float ir_value = (float)ir_far_on - (float)ir_far_off;
@@ -394,6 +408,11 @@ __interrupt void Timer3_ISR(void) {
     ir_output = -100;
   }
   steer = ir_output;
+
+  if ((!door_detected) && (ir_value - side_pid.prev_measurement > 0.00001)) {
+    door_detected = true;
+  }
+
   side_pid.prev_measurement = ir_value;
 
   // turning left at a corner
