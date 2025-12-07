@@ -57,6 +57,8 @@
 #define PS_DATA_COMMAND                                                        \
   0x08 // the command code to read from the IR proximity sensor's data registers
 
+#define DOOR_THRESHOLD 580
+
 volatile uint16_t ir_i2c_proximity;
 
 void ADC_SETUP(void);       // Used to setup ADC12 peripheral
@@ -73,6 +75,8 @@ void set_left_motor(
     int); // set left motor to given direction and PWM, value -100 to 100
 void set_right_motor(
     int); // set right motor to given direction and PWM, value -100 to 100
+
+void read_i2c_ir(void); // conduct i2c communication to read from IR sensor
 
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
@@ -102,6 +106,8 @@ volatile int steer; // a value from -100 (left) to 100 (right) determining the
 
 volatile bool door_detected;
 
+volatile bool flagflag;
+
 #define PID_LOOP_MS 62.5f // the period of the PID control loop.
 // period is based off of the configuration of Timer A 3
 typedef struct {
@@ -128,6 +134,7 @@ pid_controller_t forward_pid = {.k_p = -3.0f,
                                 .setpoint = 1000.0f / 400.0f};
 
 void main(void) {
+  flagflag = false;
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
 
   //**********************
@@ -158,14 +165,14 @@ void main(void) {
   //**********************
   //* Ultrasonic Sensor Setup
   //**********************
-  // ULTRASONIC_SETUP();
-  // int i = 0;
-  // while (i < US_FILTER_SIZE) {
-  //   ultrasonic_filter[i] = 0;
-  //   i++;
-  // }
-  // us_filter_sum = 0;
-  // us_filter_idx = 0;
+  ULTRASONIC_SETUP();
+  int i = 0;
+  while (i < US_FILTER_SIZE) {
+    ultrasonic_filter[i] = 0;
+    i++;
+  }
+  us_filter_sum = 0;
+  us_filter_idx = 0;
 
   //**********************
   //* Motor Setup
@@ -228,7 +235,9 @@ void main(void) {
 
   __enable_interrupt(); // Activate interrupts previously enabled
   while (1) {
+    flagflag = false;
     read_ir();
+    read_i2c_ir();
 
     // Turn LEDs on if we are too close
     if (forward < 1) {
@@ -252,36 +261,38 @@ void main(void) {
       P4OUT &= ~(IR_INDICATOR);
     }
 
+    steer = 0;
+
     set_left_motor(forward - steer);
     set_right_motor(forward + steer);
-
-    // I2C snsor read
-    EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
-
-    // First, send a Start condition, transmit the sensor's address plus a Write
-    // bit. Then, send the command code to read from the proximity sensor.
-    EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
-
-    // Then, send another Start condition, the sensor's address, and a Read bit.
-    //    EUSCI_B_I2C_clearInterrupt(eUSCI_B1_BASE_ADDR, 0x01);
-    EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
-    // Receive the least significant bits.
-    //    uint8_t prox_lsb =
-    //    EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
-    EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-    uint8_t prox_lsb =
-        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-
-    // Receive the most significant bits of the proximity value, then send a
-    // Stop condition.
-    EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
-    //    uint8_t prox_msb =
-    //        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
-    uint8_t prox_msb =
-        EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
-
-    ir_i2c_proximity = (prox_msb << 8) | prox_lsb;
   }
+}
+
+void read_i2c_ir(void) {
+  // I2C snsor read
+  EUSCI_B_I2C_setMode(eUSCI_B1_BASE_ADDR, EUSCI_B_I2C_TRANSMIT_MODE);
+
+  // First, send a Start condition, transmit the sensor's address plus a Write
+  // bit. Then, send the command code to read from the proximity sensor.
+  EUSCI_B_I2C_masterSendMultiByteStart(eUSCI_B1_BASE_ADDR, PS_DATA_COMMAND);
+
+  // Then, send another Start condition, the sensor's address, and a Read bit.
+  //    EUSCI_B_I2C_clearInterrupt(eUSCI_B1_BASE_ADDR, 0x01);
+  EUSCI_B_I2C_masterReceiveStart(eUSCI_B1_BASE_ADDR);
+  // Receive the least significant bits.
+  //    uint8_t prox_lsb =
+  //    EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+  EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+  uint8_t prox_lsb = EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+
+  // Receive the most significant bits of the proximity value, then send a
+  // Stop condition.
+  EUSCI_B_I2C_masterReceiveMultiByteStop(eUSCI_B1_BASE_ADDR);
+  //    uint8_t prox_msb =
+  //        EUSCI_B_I2C_masterReceiveSingle(eUSCI_B1_BASE_ADDR);
+  uint8_t prox_msb = EUSCI_B_I2C_masterReceiveMultiByteNext(eUSCI_B1_BASE_ADDR);
+
+  ir_i2c_proximity = (prox_msb << 8) | prox_lsb;
 }
 
 //***********************************************************************
@@ -295,6 +306,7 @@ __interrupt void Port_1(void) {
     if (!(P1IES & BIT3)) {     // Rising edge detected
       TA2CTL |= MC__CONTINOUS; // start the timer
       P1IES |= BIT3;           // searching for falling edge next
+      flagflag = true;
     } else {
       TA2CTL &= ~(TIMER_OFF);     // Turn timer off
       ultrasonic_pulse_us = TA2R; // Save reading
@@ -315,6 +327,8 @@ __interrupt void Port_1(void) {
 //************************************************************************
 #pragma vector = ADC12_VECTOR
 __interrupt void ADC12_ISR(void) {
+  flagflag = false;
+
   // interrupt flag is cleared by accessing this value
   int adc0_reading = ADC12MEM0;
   int adc1_reading = ADC12MEM1;
@@ -357,6 +371,8 @@ void read_ir(void) {
  */
 #pragma vector = TIMER3_A0_VECTOR
 __interrupt void Timer3_ISR(void) {
+  flagflag = false;
+
   //************************************************************************
   //* Read front sensor, determine forward speed
   //************************************************************************
@@ -382,7 +398,7 @@ __interrupt void Timer3_ISR(void) {
   forward = us_output;
 
   //************************************************************************
-  //* Read side sensor, determine steer
+  //* Read side IR sensor, determine steer
   //************************************************************************
   float ir_value = (float)ir_far_on - (float)ir_far_off;
   ir_value = 1000.0f / (ir_value * ir_value);
@@ -396,7 +412,7 @@ __interrupt void Timer3_ISR(void) {
 
   if (ir_output < 0) {
     // multiply by 2.5 if turning right to match left turn intensity
-    // because IR sensor readings still nonlinear with distance
+    // because IR sensor readings still nonlinear with distance :(
     ir_output *= 5;
     ir_output = ir_output >> 1;
   }
@@ -409,15 +425,32 @@ __interrupt void Timer3_ISR(void) {
   }
   steer = ir_output;
 
-  if ((!door_detected) && (ir_value - side_pid.prev_measurement > 0.00001)) {
-    door_detected = true;
-  }
-
   side_pid.prev_measurement = ir_value;
 
-  // turning left at a corner
-  // if there is a wall or obstacle close enough ahead,
-  // start to steer left.  closer object = more significant steer
+  //************************************************************************
+  //* Read from ultrasonic sensor,
+  //* Determine if we're passing a doorway or not
+  //************************************************************************
+  // unsigned int filtered_ultrasonic_value = us_filter_sum >> US_FILTER_POWER;
+  // if (filtered_ultrasonic_value > 0x7FFF) {
+  //   filtered_ultrasonic_value = 0x7FFF;
+  // }
+
+  int us_diff = ultrasonic_filter[(us_filter_idx - 1) % US_FILTER_SIZE] -
+                ultrasonic_filter[(us_filter_idx - 2) % US_FILTER_SIZE];
+
+  if ((-1 * us_diff) > DOOR_THRESHOLD) {
+    door_detected = true;
+  }
+  if (us_diff > DOOR_THRESHOLD) {
+    door_detected = false;
+  }
+
+  //************************************************************************
+  //* turning left at a corner
+  //* if there is a wall or obstacle close enough ahead,
+  //* start to steer left.  closer object = more significant steer
+  //************************************************************************
   int added_steer = ir_i2c_proximity / 2;
 
   if (added_steer > 15) {
@@ -445,7 +478,7 @@ void ULTRASONIC_SETUP(void) {
   //* Outputs these pulses on P1.6.
   //******************************************************************
   TA0CCR0 = 3279;   // PWM period period, in units of scaled ACLK clock ticks.
-  TA0CCR1 = 1;      // Duration for which output is HI, in units of scaled ACLK
+  TA0CCR1 = 2;      // Duration for which output is HI, in units of scaled ACLK
                     // clock ticks.
   TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
