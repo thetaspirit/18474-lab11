@@ -57,7 +57,7 @@
 #define PS_DATA_COMMAND                                                        \
   0x08 // the command code to read from the IR proximity sensor's data registers
 
-#define DOOR_THRESHOLD 580
+#define DOOR_THRESHOLD 5000
 
 volatile uint16_t ir_i2c_proximity;
 
@@ -77,6 +77,9 @@ void set_right_motor(
     int); // set right motor to given direction and PWM, value -100 to 100
 
 void read_i2c_ir(void); // conduct i2c communication to read from IR sensor
+
+void read_us(
+    void); // blocking function to send ultrasonic trigger and read echo pulse
 
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
@@ -106,7 +109,7 @@ volatile int steer; // a value from -100 (left) to 100 (right) determining the
 
 volatile bool door_detected;
 
-volatile bool flagflag;
+volatile bool us_reading_pending;
 
 #define PID_LOOP_MS 62.5f // the period of the PID control loop.
 // period is based off of the configuration of Timer A 3
@@ -134,7 +137,6 @@ pid_controller_t forward_pid = {.k_p = -3.0f,
                                 .setpoint = 1000.0f / 400.0f};
 
 void main(void) {
-  flagflag = false;
   WDTCTL = WDTPW | WDTHOLD; // Stop WDT
 
   //**********************
@@ -235,7 +237,7 @@ void main(void) {
 
   __enable_interrupt(); // Activate interrupts previously enabled
   while (1) {
-    flagflag = false;
+    read_us();
     read_ir();
     read_i2c_ir();
 
@@ -260,8 +262,6 @@ void main(void) {
     } else {
       P4OUT &= ~(IR_INDICATOR);
     }
-
-    steer = 0;
 
     set_left_motor(forward - steer);
     set_right_motor(forward + steer);
@@ -295,6 +295,54 @@ void read_i2c_ir(void) {
   ir_i2c_proximity = (prox_msb << 8) | prox_lsb;
 }
 
+/**
+ * Blocking read function for ultrasonic sensor
+ */
+void read_us(void) {
+  // disable other interrupts
+  TA3CCTL0 &= ~(CCIE); // Enable interrupt for Timer_3
+
+  // send trigger pulse by starting Timer A 0
+  TA0CTL |= TIMER_CLEAR; // Timer starts at 0
+  TA0CTL |= UP;          // Set ACLK, UP MODE
+
+  us_reading_pending = true;
+
+  TA2CTL |= MC__CONTINOUS; // start the timer (to detect overflow)
+
+  // wait for rising edge from echo
+  while (!(P1IN & BIT3) && us_reading_pending) {
+    continue;
+  }
+  // rising edge detected, clear the timer
+  TA2CTL |= TIMER_CLEAR;
+
+  // wait for falling edge from echo
+  while ((P1IN & BIT3) && us_reading_pending) {
+    continue;
+  }
+
+  if (us_reading_pending) {
+    // falling edge detected, stop the timer and save the value
+    TA2CTL &= ~(TIMER_OFF);     // Turn timer off
+    ultrasonic_pulse_us = TA2R; // Save reading
+    TA2CTL |= TIMER_CLEAR;      // clear timer
+
+    ultrasonic_pulse_us = ultrasonic_pulse_us >> 1;
+
+    us_filter_sum -= ultrasonic_filter[us_filter_idx];
+    us_filter_sum += ultrasonic_pulse_us;
+    ultrasonic_filter[us_filter_idx] = ultrasonic_pulse_us;
+    us_filter_idx++;
+    us_filter_idx %= US_FILTER_SIZE;
+
+    us_reading_pending = false;
+  }
+
+  // re-enable other interrupts
+  TA3CCTL0 |= CCIE; // Enable interrupt for Timer_3
+}
+
 //***********************************************************************
 //* Port 1 Interrupt Service Routine
 //* Measures pulse width from the ultrasonic sensor's echo pin
@@ -306,7 +354,6 @@ __interrupt void Port_1(void) {
     if (!(P1IES & BIT3)) {     // Rising edge detected
       TA2CTL |= MC__CONTINOUS; // start the timer
       P1IES |= BIT3;           // searching for falling edge next
-      flagflag = true;
     } else {
       TA2CTL &= ~(TIMER_OFF);     // Turn timer off
       ultrasonic_pulse_us = TA2R; // Save reading
@@ -318,6 +365,8 @@ __interrupt void Port_1(void) {
       ultrasonic_filter[us_filter_idx] = ultrasonic_pulse_us;
       us_filter_idx++;
       us_filter_idx %= US_FILTER_SIZE;
+
+      us_reading_pending = false;
     }
   }
 }
@@ -327,8 +376,6 @@ __interrupt void Port_1(void) {
 //************************************************************************
 #pragma vector = ADC12_VECTOR
 __interrupt void ADC12_ISR(void) {
-  flagflag = false;
-
   // interrupt flag is cleared by accessing this value
   int adc0_reading = ADC12MEM0;
   int adc1_reading = ADC12MEM1;
@@ -371,7 +418,6 @@ void read_ir(void) {
  */
 #pragma vector = TIMER3_A0_VECTOR
 __interrupt void Timer3_ISR(void) {
-  flagflag = false;
 
   //************************************************************************
   //* Read front sensor, determine forward speed
@@ -431,19 +477,11 @@ __interrupt void Timer3_ISR(void) {
   //* Read from ultrasonic sensor,
   //* Determine if we're passing a doorway or not
   //************************************************************************
-  // unsigned int filtered_ultrasonic_value = us_filter_sum >> US_FILTER_POWER;
-  // if (filtered_ultrasonic_value > 0x7FFF) {
-  //   filtered_ultrasonic_value = 0x7FFF;
-  // }
+  door_detected =
+      ultrasonic_filter[(us_filter_idx - 1) & (0x3)] > DOOR_THRESHOLD;
 
-  int us_diff = ultrasonic_filter[(us_filter_idx - 1) % US_FILTER_SIZE] -
-                ultrasonic_filter[(us_filter_idx - 2) % US_FILTER_SIZE];
-
-  if ((-1 * us_diff) > DOOR_THRESHOLD) {
-    door_detected = true;
-  }
-  if (us_diff > DOOR_THRESHOLD) {
-    door_detected = false;
+  if (door_detected) {
+    steer = 10;
   }
 
   //************************************************************************
@@ -477,13 +515,15 @@ void ULTRASONIC_SETUP(void) {
   //* Sends a pulse (at most) every 60 us, possibly longer.
   //* Outputs these pulses on P1.6.
   //******************************************************************
-  TA0CCR0 = 3279;   // PWM period period, in units of scaled ACLK clock ticks.
-  TA0CCR1 = 2;      // Duration for which output is HI, in units of scaled ACLK
-                    // clock ticks.
+  TA0CCR0 = 3; // PWM period period, in units of scaled ACLK clock ticks.
+  TA0CCR1 = 2; // Duration for which output is HI, in units of scaled ACLK clock
+               // ticks.
   TA0CCTL1 |= 0xE0; // Output Mode 7 (reset/set)
 
-  TA0CTL = ACLK | UP;    // Set ACLK, UP MODE
-  TA0CTL |= TIMER_CLEAR; // Timer starts at 0
+  TA0CTL |= ACLK | UP;    // Set ACLK, UP MODE
+  TA0CTL &= ~(TIMER_OFF); // turn timer off for now
+  TA0CTL |= TIMER_CLEAR;  // Timer starts at 0
+  TA0CCTL0 |= CCIE;       // Enable interrupt for Timer_0
 
   // GPIO Output
   P1SELC |= BIT6; // Set bits P1SEL1.6 and P1SEL0.6 simultaneously
@@ -499,11 +539,35 @@ void ULTRASONIC_SETUP(void) {
   TA2CTL = SMCLK | MC__CONTINOUS; // Set SMCLK, CONTINUOUS MODE
   TA2CTL &= ~(TIMER_OFF);         // Timer starts as off
   TA2CTL |= TIMER_CLEAR;          // Timer starts at 0
+  TA2CCTL0 |= CCIE;               // Enable interrupt for Timer_2
 
   // GPIO Input
-  P1IE = BIT3;      // Enable interrupt for P1.3
-  P1IES &= ~(BIT3); // Start by looking for rising edges
-  P1IFG = 0x00;     // Ensure no interrupts are pending
+  // P1IE = BIT3;      // Enable interrupt for P1.3
+  // P1IES &= ~(BIT3); // Start by looking for rising edges
+  // P1IFG = 0x00;     // Ensure no interrupts are pending
+}
+
+/**
+Interrupt for Timer A 0
+Stops timer and clears it
+ */
+#pragma vector = TIMER0_A0_VECTOR
+__interrupt void Timer0_ISR(void) {
+  TA0CTL &= ~(TIMER_OFF); // turn timer off for now
+  TA0CTL |= TIMER_CLEAR;  // Timer starts at 0
+}
+
+/**
+Interrupt for Timer A 2
+Stops timer, clears it, and sets us_reading_pending to false
+This prevents the firmware from hanging if there are any issues with reading the
+GPIO pin (as there often are)
+ */
+#pragma vector = TIMER2_A0_VECTOR
+__interrupt void Timer2_ISR(void) {
+  TA2CTL &= ~(TIMER_OFF); // turn timer off for now
+  TA2CTL |= TIMER_CLEAR;  // Timer starts at 0
+  us_reading_pending = false;
 }
 
 void ADC_SETUP(void) {
