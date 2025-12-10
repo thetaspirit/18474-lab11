@@ -57,7 +57,7 @@
 #define PS_DATA_COMMAND                                                        \
   0x08 // the command code to read from the IR proximity sensor's data registers
 
-#define DOOR_THRESHOLD 5000
+#define DOOR_THRESHOLD 1000
 
 volatile uint16_t ir_i2c_proximity;
 
@@ -80,6 +80,8 @@ void read_i2c_ir(void); // conduct i2c communication to read from IR sensor
 
 void read_us(
     void); // blocking function to send ultrasonic trigger and read echo pulse
+
+void control_loop(void);
 
 volatile unsigned int ultrasonic_pulse_us;
 // width of pulse from ultrasonic sensor, in microseconds
@@ -241,6 +243,8 @@ void main(void) {
     read_ir();
     read_i2c_ir();
 
+    control_loop();
+
     // Turn LEDs on if we are too close
     if (forward < 1) {
       P4OUT |= US_INDICATOR;
@@ -327,8 +331,6 @@ void read_us(void) {
     TA2CTL &= ~(TIMER_OFF);     // Turn timer off
     ultrasonic_pulse_us = TA2R; // Save reading
     TA2CTL |= TIMER_CLEAR;      // clear timer
-
-    ultrasonic_pulse_us = ultrasonic_pulse_us >> 1;
 
     us_filter_sum -= ultrasonic_filter[us_filter_idx];
     us_filter_sum += ultrasonic_pulse_us;
@@ -417,8 +419,9 @@ void read_ir(void) {
  * Reads sensor values and calculates control outputs
  */
 #pragma vector = TIMER3_A0_VECTOR
-__interrupt void Timer3_ISR(void) {
+__interrupt void Timer3_ISR(void) { return; }
 
+void control_loop(void) {
   //************************************************************************
   //* Read front sensor, determine forward speed
   //************************************************************************
@@ -477,8 +480,15 @@ __interrupt void Timer3_ISR(void) {
   //* Read from ultrasonic sensor,
   //* Determine if we're passing a doorway or not
   //************************************************************************
-  door_detected =
-      ultrasonic_filter[(us_filter_idx - 1) & (0x3)] > DOOR_THRESHOLD;
+
+  int us_diff = ultrasonic_filter[(us_filter_idx - 1) & (0x3)] -
+                ultrasonic_filter[(us_filter_idx - 2) & (0x3)];
+
+  if ((us_diff * -1 > DOOR_THRESHOLD)) {
+    door_detected = false;
+  } else if (us_diff > DOOR_THRESHOLD) {
+    door_detected = true;
+  }
 
   if (door_detected) {
     steer = 10;
